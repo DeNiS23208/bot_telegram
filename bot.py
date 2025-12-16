@@ -1,10 +1,13 @@
 import asyncio
 import os
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from dotenv import load_dotenv
+
+from db import init_db, ensure_user, get_subscription_expires_at
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -17,6 +20,7 @@ def main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💳 Оплатить доступ")],
+            [KeyboardButton(text="📌 Статус подписки")],
             [KeyboardButton(text="ℹ️ О проекте")]
         ],
         resize_keyboard=True
@@ -25,28 +29,43 @@ def main_menu():
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    await ensure_user(message.from_user.id, message.from_user.username)
     await message.answer(
         "Привет! Это тестовый бот для MVP.\nВыбери действие:",
         reply_markup=main_menu()
     )
 
 
+@dp.message(lambda message: message.text == "📌 Статус подписки")
+async def sub_status(message: Message):
+    expires_at = await get_subscription_expires_at(message.from_user.id)
+
+    if not expires_at:
+        await message.answer("Подписка не активна ❌")
+        return
+
+    now = datetime.utcnow()
+    if expires_at > now:
+        await message.answer(f"Подписка активна ✅\nДействует до: {expires_at.date()}")
+    else:
+        await message.answer(f"Подписка закончилась ❌\nЗакончилась: {expires_at.date()}")
+
+
 @dp.message(lambda message: message.text == "ℹ️ О проекте")
 async def about(message: Message):
     await message.answer(
         "Это MVP Telegram-бота с доступом в закрытый канал.\n"
-        "Оплата и подписка будут добавлены дальше."
+        "Сегодня мы подключили базу данных (SQLite) и статус подписки."
     )
 
 
 @dp.message(lambda message: message.text == "💳 Оплатить доступ")
 async def pay_stub(message: Message):
-    await message.answer(
-        "💳 Оплата будет подключена на следующем этапе."
-    )
+    await message.answer("💳 Оплата будет подключена на следующем этапе.")
 
 
 async def main():
+    await init_db()
     await dp.start_polling(bot)
 
 
