@@ -7,9 +7,11 @@ from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from dotenv import load_dotenv
 from db import init_db, ensure_user, get_subscription_expires_at, activate_subscription_days
+from payments import create_payment
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
+RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://example.com/return")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -59,10 +61,20 @@ async def about(message: Message):
 
 
 @dp.message(lambda message: message.text == "💳 Оплатить доступ")
-async def pay_stub(message: Message):
-    expires_at = await activate_subscription_days(message.from_user.id, days=30)
-    await message.answer(f"✅ Подписка активирована (тест).\nДействует до: {expires_at.date()}")
+async def pay(message: Message):
+    await ensure_user(message.from_user.id, message.from_user.username)
 
+    payment_id, pay_url = create_payment(
+        amount_rub="299.00",
+        description=f"Подписка на канал. tg_id={message.from_user.id}",
+        return_url=RETURN_URL
+    )
+
+    await message.answer(
+        "Чтобы оплатить, перейдите по ссылке:\n"
+        f"{pay_url}\n\n"
+        f"ID платежа: {payment_id}"
+    )
 
 
 async def main():
