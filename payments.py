@@ -38,5 +38,10 @@ def create_payment(amount_rub: str, description: str, return_url: str):
     return payment.id, payment.confirmation.confirmation_url
 
 
+def get_payment_status(payment_id: str) -> str:
+    p = Payment.find_one(payment_id)
+    return p.status
+
+
 print("SHOP_ID =", os.getenv("YOOKASSA_SHOP_ID"))
 print("SECRET =", bool(os.getenv("YOOKASSA_SECRET_KEY")))

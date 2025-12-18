@@ -8,19 +8,67 @@ DB_PATH = "bot.db"
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                telegram_id INTEGER PRIMARY KEY,
-                username TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS users
+                         (
+                             telegram_id
+                             INTEGER
+                             PRIMARY
+                             KEY,
+                             username
+                             TEXT,
+                             created_at
+                             TEXT
+                             NOT
+                             NULL
+                         )
+                         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                telegram_id INTEGER PRIMARY KEY,
-                expires_at TEXT,
-                FOREIGN KEY (telegram_id) REFERENCES users (telegram_id)
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS subscriptions
+                         (
+                             telegram_id
+                             INTEGER
+                             PRIMARY
+                             KEY,
+                             expires_at
+                             TEXT,
+                             FOREIGN
+                             KEY
+                         (
+                             telegram_id
+                         ) REFERENCES users
+                         (
+                             telegram_id
+                         )
+                             )
+                         """)
+        await db.execute("""
+                         CREATE TABLE IF NOT EXISTS payments
+                         (
+                             id
+                             INTEGER
+                             PRIMARY
+                             KEY
+                             AUTOINCREMENT,
+                             telegram_id
+                             INTEGER
+                             NOT
+                             NULL,
+                             payment_id
+                             TEXT
+                             NOT
+                             NULL
+                             UNIQUE,
+                             status
+                             TEXT
+                             NOT
+                             NULL,
+                             created_at
+                             TEXT
+                             NOT
+                             NULL
+                         )
+                         """)
+
         await db.commit()
 
 
@@ -74,11 +122,39 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> dateti
         await db.execute(
             """
             INSERT INTO subscriptions (telegram_id, expires_at)
-            VALUES (?, ?)
-            ON CONFLICT(telegram_id) DO UPDATE SET expires_at=excluded.expires_at
+            VALUES (?, ?) ON CONFLICT(telegram_id) DO
+            UPDATE SET expires_at=excluded.expires_at
             """,
             (telegram_id, expires_at.isoformat())
         )
         await db.commit()
 
     return expires_at
+
+
+async def save_payment(telegram_id: int, payment_id: str, status: str = "pending") -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO payments (telegram_id, payment_id, status, created_at) VALUES (?, ?, ?, ?)",
+            (telegram_id, payment_id, status, datetime.utcnow().isoformat())
+        )
+        await db.commit()
+
+
+async def update_payment_status(payment_id: str, status: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE payments SET status = ? WHERE payment_id = ?",
+            (status, payment_id)
+        )
+        await db.commit()
+
+
+async def get_latest_payment_id(telegram_id: int) -> Optional[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT payment_id FROM payments WHERE telegram_id = ? ORDER BY id DESC LIMIT 1",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    return row[0] if row else None
