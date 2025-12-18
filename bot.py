@@ -6,8 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from dotenv import load_dotenv
-
-from db import init_db, ensure_user, get_subscription_expires_at
+from db import init_db, ensure_user, get_subscription_expires_at, activate_subscription_days
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -61,7 +60,9 @@ async def about(message: Message):
 
 @dp.message(lambda message: message.text == "💳 Оплатить доступ")
 async def pay_stub(message: Message):
-    await message.answer("💳 Оплата будет подключена на следующем этапе.")
+    expires_at = await activate_subscription_days(message.from_user.id, days=30)
+    await message.answer(f"✅ Подписка активирована (тест).\nДействует до: {expires_at.date()}")
+
 
 
 async def main():

@@ -1,5 +1,5 @@
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 DB_PATH = "bot.db"
@@ -54,3 +54,31 @@ async def get_subscription_expires_at(telegram_id: int) -> Optional[datetime]:
         return datetime.fromisoformat(row[0])
     except ValueError:
         return None
+
+
+async def activate_subscription_days(telegram_id: int, days: int = 30) -> datetime:
+    """
+    Активирует подписку на N дней от текущего момента (UTC).
+    Если запись уже есть — обновляет expires_at.
+    """
+    expires_at = datetime.utcnow() + timedelta(days=days)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # гарантируем, что юзер существует
+        await db.execute(
+            "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
+            (telegram_id, None, datetime.utcnow().isoformat())
+        )
+
+        # upsert подписки
+        await db.execute(
+            """
+            INSERT INTO subscriptions (telegram_id, expires_at)
+            VALUES (?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET expires_at=excluded.expires_at
+            """,
+            (telegram_id, expires_at.isoformat())
+        )
+        await db.commit()
+
+    return expires_at
