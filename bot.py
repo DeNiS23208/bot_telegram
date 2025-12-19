@@ -31,7 +31,6 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Тексты кнопок (держим в одном месте)
 BTN_PAY_1 = "💳 Оплатить доступ"
 BTN_PAY_2 = "Оплатить доступ"
 BTN_PAY_3 = "Оплатить подписку"
@@ -59,10 +58,6 @@ def main_menu() -> ReplyKeyboardMarkup:
 
 
 async def maybe_await(func, *args, **kwargs):
-    """
-    Позволяет вызывать функцию, которая может быть sync или async.
-    Если func возвращает корутину - await'им её, иначе возвращаем как есть.
-    """
     result = func(*args, **kwargs)
     if inspect.isawaitable(result):
         return await result
@@ -105,16 +100,14 @@ async def about(message: Message):
 async def pay(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
 
-    # Чтобы больше не было "нажал и тишина", выводим ошибку пользователю,
-    # а в логах пусть валится дальше со stack trace.
     try:
-        # create_payment может быть sync или async, поэтому вызываем безопасно
         payment_id, pay_url = await maybe_await(
             create_payment,
             amount_rub="10.00",
             description="Подписка на канал (30 дней)",
             return_url=RETURN_URL,
-            customer_email=CUSTOMER_EMAIL,  # ✅ ВАЖНО для receipt (54-ФЗ)
+            customer_email=CUSTOMER_EMAIL,
+            telegram_user_id=message.from_user.id,  # ✅ для webhook
         )
     except Exception as e:
         await message.answer(f"Ошибка при создании платежа: {type(e).__name__}: {e}")
@@ -137,7 +130,6 @@ async def check_payment(message: Message):
         await message.answer("Не нашёл платежей. Сначала нажмите 💳 Оплатить доступ.")
         return
 
-    # get_payment_status может быть sync или async
     try:
         status = await maybe_await(get_payment_status, payment_id)
     except Exception as e:
@@ -166,4 +158,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
