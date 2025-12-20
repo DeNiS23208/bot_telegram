@@ -1,0 +1,9 @@
+# Минимальный набор для Telegram-бота с оплатой через ЮKassa (по твоему списку версий)
+aiogram==3.23.0
+aiosqlite==0.22.0
+python-dotenv==1.0.1
+yookassa==3.9.0
+
+# Если ты делаешь вебхук ЮKassa через FastAPI (рекомендовано)
+fastapi==0.124.4
+uvicorn==0.38.0
