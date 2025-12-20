@@ -325,6 +325,7 @@ async def check_expired_subscriptions():
                         RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'History_Nail_Khasanov_bot')}?start=payment_return"
                         CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
                         
+                        # create_payment - синхронная функция
                         payment_id, pay_url = create_payment(
                             amount_rub="1.00",
                             description="Продление подписки на канал (30 дней)",
