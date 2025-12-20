@@ -5,11 +5,15 @@
 """
 import os
 import sqlite3
-from dotenv import load_dotenv
 
-load_dotenv()
+# Пытаемся загрузить .env, но не падаем если его нет
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # Если dotenv не установлен, используем переменные окружения напрямую
 
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+DB_PATH = os.getenv("DB_PATH", "/opt/bot_telegram/bot.db")
 
 def clear_old_data():
     """Очищает старые данные из БД"""
