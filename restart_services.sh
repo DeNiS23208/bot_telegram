@@ -30,3 +30,5 @@ echo "Если сервисы не найдены, запустите вручн
 echo "1. Для бота: cd /opt/bot_telegram && source venv/bin/activate && python3 bot.py &"
 echo "2. Для webhook: cd /opt/bot_telegram && source venv/bin/activate && uvicorn webhook_app:app --host 0.0.0.0 --port 8000 &"
 
+
+

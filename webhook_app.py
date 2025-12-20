@@ -365,6 +365,42 @@ async def yookassa_webhook(request: Request):
         
         return {"ok": True, "event": "payment.canceled"}
 
+    # Обрабатываем возвраты (refunds)
+    if event == "refund.succeeded":
+        print(f"🔄 Обработка refund.succeeded: {payment_id}")
+        try:
+            # Получаем информацию о возврате
+            refund_obj = notification.object
+            payment_id_refund = refund_obj.payment_id if hasattr(refund_obj, 'payment_id') else None
+            
+            if payment_id_refund:
+                # Получаем оригинальный платеж
+                payment = Payment.find_one(payment_id_refund)
+                meta = payment.metadata or {}
+                tg_user_id = meta.get("telegram_user_id")
+                
+                if tg_user_id:
+                    tg_user_id = int(tg_user_id)
+                    amount = refund_obj.amount.value if hasattr(refund_obj, 'amount') else "0"
+                    currency = refund_obj.amount.currency if hasattr(refund_obj, 'amount') else "RUB"
+                    
+                    # Уведомляем пользователя о возврате
+                    try:
+                        await bot.send_message(
+                            tg_user_id,
+                            f"💰 Возврат средств выполнен\n\n"
+                            f"Сумма возврата: {amount} {currency}\n"
+                            f"ID платежа: {payment_id_refund}\n\n"
+                            f"Деньги будут возвращены на карту в течение нескольких рабочих дней."
+                        )
+                        print(f"✅ Отправлено уведомление о возврате пользователю {tg_user_id}")
+                    except Exception as e:
+                        print(f"❌ Ошибка отправки уведомления о возврате: {e}")
+        except Exception as e:
+            print(f"❌ Ошибка обработки refund.succeeded: {e}")
+        
+        return {"ok": True, "event": "refund.succeeded"}
+
     # Обрабатываем успешные платежи
     if event != "payment.succeeded":
         return {"ok": True, "event": event}

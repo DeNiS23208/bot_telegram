@@ -1,5 +1,6 @@
 import os
 import uuid
+from typing import Optional
 
 from dotenv import load_dotenv
 from yookassa import Configuration, Payment
@@ -62,4 +63,15 @@ def create_payment(
 def get_payment_status(payment_id: str) -> str:
     payment = Payment.find_one(payment_id)
     return payment.status
+
+
+def get_payment_url(payment_id: str) -> Optional[str]:
+    """Получает URL для оплаты по payment_id"""
+    try:
+        payment = Payment.find_one(payment_id)
+        if payment.confirmation and payment.confirmation.confirmation_url:
+            return payment.confirmation.confirmation_url
+        return None
+    except Exception:
+        return None
 

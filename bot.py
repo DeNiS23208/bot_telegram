@@ -16,8 +16,9 @@ from db import (
     save_payment,
     update_payment_status,
     get_latest_payment_id,
+    get_active_pending_payment,
 )
-from payments import create_payment, get_payment_status
+from payments import create_payment, get_payment_status, get_payment_url
 
 load_dotenv()
 
@@ -131,6 +132,25 @@ async def about(message: Message):
 async def pay(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
 
+    # Проверяем, есть ли активный pending платеж (созданный менее 10 минут назад)
+    active_payment = await get_active_pending_payment(message.from_user.id, minutes=10)
+    
+    if active_payment:
+        payment_id, created_at = active_payment
+        # Получаем ссылку на оплату для существующего платежа
+        pay_url = await maybe_await(get_payment_url, payment_id)
+        
+        if pay_url:
+            await message.answer(
+                "У вас уже есть активная ссылка на оплату.\n\n"
+                "Чтобы оплатить, перейдите по ссылке:\n"
+                f"{pay_url}\n\n"
+                "После оплаты вернитесь сюда и нажмите: ✅ Проверить оплату\n\n"
+                "⚠️ Ссылка действительна 10 минут с момента создания."
+            )
+            return
+    
+    # Создаем новый платеж, если активного нет
     payment_id, pay_url = await maybe_await(
         create_payment,
         amount_rub="1.00",  # Тестовая сумма 1 рубль
@@ -145,7 +165,8 @@ async def pay(message: Message):
     await message.answer(
         "Чтобы оплатить, перейдите по ссылке:\n"
         f"{pay_url}\n\n"
-        "После оплаты вернитесь сюда и нажмите: ✅ Проверить оплату"
+        "После оплаты вернитесь сюда и нажмите: ✅ Проверить оплату\n\n"
+        "⚠️ Ссылка действительна 10 минут."
     )
 
 
