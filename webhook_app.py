@@ -195,11 +195,41 @@ async def yookassa_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Bad YooKassa notification")
 
-    if notification.event != "payment.succeeded":
-        return {"ok": True}
-
     payment_obj = notification.object
     payment_id = payment_obj.id
+    event = notification.event
+
+    # Обрабатываем отмененные/неудачные платежи
+    if event == "payment.canceled":
+        payment = Payment.find_one(payment_id)
+        meta = payment.metadata or {}
+        tg_user_id = meta.get("telegram_user_id")
+        
+        if tg_user_id:
+            tg_user_id = int(tg_user_id)
+            # Обновляем статус платежа в БД
+            await update_payment_status_async(payment_id, "canceled")
+            
+            # Уведомляем пользователя
+            try:
+                await bot.send_message(
+                    tg_user_id,
+                    "❌ Платёж не был завершён\n\n"
+                    "Оплата была отменена или не прошла.\n"
+                    "Возможные причины:\n"
+                    "• Недостаточно средств на карте\n"
+                    "• Операция была отменена\n"
+                    "• Истекло время ожидания оплаты\n\n"
+                    "Вы можете попробовать оплатить снова, нажав кнопку 💳 Оплатить доступ."
+                )
+            except Exception as e:
+                print(f"Ошибка отправки уведомления об отмене платежа: {e}")
+        
+        return {"ok": True, "event": "payment.canceled"}
+
+    # Обрабатываем успешные платежи
+    if event != "payment.succeeded":
+        return {"ok": True, "event": event}
 
     if already_processed(payment_id):
         return {"ok": True, "duplicate": True}
