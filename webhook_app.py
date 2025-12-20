@@ -388,7 +388,7 @@ async def check_expired_subscriptions():
                         # Создаем новую ссылку на оплату для продления
                         from payments import create_payment
                         
-                        RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'History_Nail_Khasanov_bot')}?start=payment_return"
+                        RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'work232_bot')}"
                         CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
                         
                         # create_payment - синхронная функция

@@ -26,7 +26,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Имя бота из переменной окружения или по умолчанию
-BOT_USERNAME = os.getenv("BOT_USERNAME", "History_Nail_Khasanov_bot")
+# Правильное имя бота: work232_bot (без @)
+BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
 # Используем простую ссылку на бота без параметров, так как параметры могут не работать в некоторых случаях
 # Пользователь все равно попадет в бота и может нажать кнопку "Проверить оплату"
 RETURN_URL = f"https://t.me/{BOT_USERNAME}"
