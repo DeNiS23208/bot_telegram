@@ -16,6 +16,7 @@ from db import (
     save_payment,
     update_payment_status,
     get_latest_payment_id,
+    get_expired_subscriptions,
 )
 from payments import create_payment, get_payment_status
 
@@ -23,6 +24,7 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://xasanim.ru/")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -134,8 +136,59 @@ async def check_payment(message: Message):
         await message.answer(f"Статус платежа: {status}")
 
 
+async def check_and_remove_expired_subscriptions():
+    """
+    Периодическая задача: проверяет истекшие подписки и удаляет пользователей из канала.
+    Запускается каждые 6 часов.
+    """
+    if not CHANNEL_ID:
+        return
+    
+    try:
+        channel_id = int(CHANNEL_ID)
+        expired_users = await get_expired_subscriptions()
+        
+        for user_id in expired_users:
+            try:
+                # Удаляем пользователя из канала: бан на секунду, затем разбан (эффективно удаляет)
+                await bot.ban_chat_member(
+                    chat_id=channel_id,
+                    user_id=user_id,
+                    until_date=datetime.utcnow().timestamp() + 1
+                )
+                # Сразу разбаниваем, чтобы просто удалить без бана
+                await bot.unban_chat_member(
+                    chat_id=channel_id,
+                    user_id=user_id,
+                    only_if_banned=False
+                )
+                # Отправляем уведомление пользователю
+                await bot.send_message(
+                    user_id,
+                    "❌ Ваша подписка истекла. Доступ в закрытый канал закрыт.\n\n"
+                    "Чтобы продлить доступ, оформите новую подписку."
+                )
+            except Exception as e:
+                # Игнорируем ошибки (пользователь может уже не быть в канале)
+                print(f"Ошибка при удалении пользователя {user_id} из канала: {e}")
+    except Exception as e:
+        print(f"Ошибка при проверке истекших подписок: {e}")
+
+
+async def subscription_checker():
+    """Фоновая задача для проверки истекших подписок"""
+    while True:
+        await asyncio.sleep(6 * 60 * 60)  # Проверка каждые 6 часов
+        await check_and_remove_expired_subscriptions()
+
+
 async def main():
     await init_db()
+    
+    # Запускаем фоновую задачу для проверки истекших подписок
+    asyncio.create_task(subscription_checker())
+    
+    # Запускаем бота
     await dp.start_polling(bot)
 
 

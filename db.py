@@ -158,3 +158,29 @@ async def get_latest_payment_id(telegram_id: int) -> Optional[str]:
         )
         row = await cur.fetchone()
     return row[0] if row else None
+
+
+async def get_expired_subscriptions() -> list[int]:
+    """
+    Возвращает список telegram_id пользователей с истекшими подписками.
+    """
+    now = datetime.utcnow()
+    expired_users = []
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT telegram_id, expires_at FROM subscriptions WHERE expires_at IS NOT NULL",
+        )
+        rows = await cur.fetchall()
+        
+        for row in rows:
+            telegram_id, expires_at_str = row
+            if expires_at_str:
+                try:
+                    expires_at = datetime.fromisoformat(expires_at_str)
+                    if expires_at <= now:
+                        expired_users.append(telegram_id)
+                except ValueError:
+                    continue
+    
+    return expired_users
