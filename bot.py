@@ -27,7 +27,9 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Имя бота из переменной окружения или по умолчанию
 BOT_USERNAME = os.getenv("BOT_USERNAME", "History_Nail_Khasanov_bot")
-RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
+# Используем простую ссылку на бота без параметров, так как параметры могут не работать в некоторых случаях
+# Пользователь все равно попадет в бота и может нажать кнопку "Проверить оплату"
+RETURN_URL = f"https://t.me/{BOT_USERNAME}"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -241,7 +243,15 @@ async def approve_join_request(join_request: ChatJoinRequest):
 
 async def main():
     await init_db()
-    await init_bot_username()  # Получаем имя бота перед запуском
+    # Получаем имя бота из API для обновления RETURN_URL
+    try:
+        bot_info = await bot.get_me()
+        global BOT_USERNAME, RETURN_URL
+        BOT_USERNAME = bot_info.username
+        RETURN_URL = f"https://t.me/{BOT_USERNAME}"
+        print(f"✅ Имя бота получено: @{BOT_USERNAME}")
+    except Exception as e:
+        print(f"⚠️ Не удалось получить имя бота из API: {e}, используем из .env")
     await dp.start_polling(bot)
 
 
