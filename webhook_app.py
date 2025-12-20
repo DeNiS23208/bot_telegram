@@ -255,6 +255,27 @@ async def get_expired_subscriptions():
         return rows
 
 
+async def get_subscriptions_expiring_soon():
+    """Получает список подписок, которые истекают через 3 дня (для уведомления)"""
+    async with aiosqlite.connect(DB_PATH) as db_conn:
+        now = datetime.utcnow()
+        # Подписки, которые истекают ровно через 3 дня (с небольшой погрешностью)
+        target_date = now + timedelta(days=3)
+        # Проверяем подписки, которые истекают в течение следующих 24 часов после 3 дней
+        start_date = target_date.isoformat()
+        end_date = (target_date + timedelta(hours=24)).isoformat()
+        cursor = await db_conn.execute(
+            """
+            SELECT telegram_id, expires_at 
+            FROM subscriptions 
+            WHERE expires_at >= ? AND expires_at <= ?
+            """,
+            (start_date, end_date)
+        )
+        rows = await cursor.fetchall()
+        return rows
+
+
 async def check_expired_payments():
     """Проверяет истекшие платежи и уведомляет пользователей"""
     while True:
