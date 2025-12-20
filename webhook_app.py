@@ -162,49 +162,61 @@ async def yookassa_webhook(request: Request):
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
 
-    # Пытаемся добавить пользователя напрямую в канал (если возможно)
+    # Сначала проверяем и разбаниваем пользователя, если он был забанен
     try:
-        # Сначала проверяем, не забанен ли пользователь, и разбаниваем если нужно
         await bot.unban_chat_member(
             chat_id=CHANNEL_ID,
             user_id=tg_user_id,
-            only_if_banned=False
+            only_if_banned=True  # Разбаниваем только если был забанен
         )
-    except Exception as e:
-        # Если не получилось добавить напрямую (например, канал требует заявку), создаем ссылку
-        pass
+    except Exception:
+        pass  # Игнорируем ошибки разбана
 
-    # Создаём одноразовую ссылку БЕЗ заявки - пользователь сразу попадает в канал
-    # Если канал требует одобрения, ссылка всё равно будет работать, но заявка будет одобрена автоматически
+    # Пытаемся создать ссылку БЕЗ заявки (прямой доступ)
+    invite_link = None
     try:
         invite = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
-            creates_join_request=False,  # Без заявки - прямой доступ
-            member_limit=1,  # Одноразовая ссылка - только для одного пользователя
-            expire_date=datetime.utcnow() + timedelta(hours=24)  # Действует 24 часа
-        )
-        invite_link = invite.invite_link
-    except Exception:
-        # Если не получилось создать ссылку без заявки, создаем обычную ссылку
-        # Заявка будет автоматически одобрена через обработчик
-        invite = await bot.create_chat_invite_link(
-            chat_id=CHANNEL_ID,
-            creates_join_request=True,  # С заявкой, но она будет автоматически одобрена
-            member_limit=1,
+            creates_join_request=False,  # БЕЗ заявки - прямой доступ
+            member_limit=1,  # Одноразовая ссылка
             expire_date=datetime.utcnow() + timedelta(hours=24)
         )
         invite_link = invite.invite_link
+        print(f"✅ Создана ссылка БЕЗ заявки для пользователя {tg_user_id}")
+    except Exception as e:
+        # Если не получилось (канал требует одобрения), создаем ссылку с заявкой
+        # Заявка будет автоматически одобрена через обработчик в bot.py
+        print(f"⚠️ Не удалось создать ссылку без заявки: {e}. Создаю ссылку с заявкой.")
+        try:
+            invite = await bot.create_chat_invite_link(
+                chat_id=CHANNEL_ID,
+                creates_join_request=True,  # С заявкой, но она будет автоматически одобрена
+                member_limit=1,
+                expire_date=datetime.utcnow() + timedelta(hours=24)
+            )
+            invite_link = invite.invite_link
+        except Exception as e2:
+            print(f"❌ Ошибка создания ссылки: {e2}")
+            # Отправляем сообщение об ошибке
+            await bot.send_message(
+                tg_user_id,
+                "✅ Оплата подтверждена!\n\n"
+                "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором."
+            )
+            mark_processed(payment_id)
+            return {"ok": True, "error": "failed to create invite link"}
 
     # Сохраняем информацию о ссылке в БД
-    save_invite_link(invite_link, tg_user_id, payment_id)
+    if invite_link:
+        save_invite_link(invite_link, tg_user_id, payment_id)
 
-    await bot.send_message(
-        tg_user_id,
-        "✅ Оплата подтверждена!\n\n"
-        "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
-        f"{invite_link}\n\n"
-        "⚠️ Ссылка одноразовая и персональная. Если потребуется одобрение - оно будет автоматическим."
-    )
+        await bot.send_message(
+            tg_user_id,
+            "✅ Оплата подтверждена!\n\n"
+            "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
+            f"{invite_link}\n\n"
+            "⚠️ Ссылка одноразовая и персональная. Заявка будет одобрена автоматически."
+        )
 
     mark_processed(payment_id)
     return {"ok": True, "payment_id": payment_id}
