@@ -22,7 +22,12 @@ from payments import create_payment, get_payment_status
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://xasanim.ru/")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")  # Имя бота без @ (например: History_Nail_Khasanov_bot)
+# Создаем ссылку на бота для возврата после оплаты
+if BOT_USERNAME:
+    RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
+else:
+    RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
@@ -82,6 +87,17 @@ async def maybe_await(func, *args, **kwargs):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
+    
+    # Обрабатываем возврат после оплаты
+    if message.text and "payment_return" in message.text:
+        await message.answer(
+            "Вы вернулись после оплаты.\n\n"
+            "Если оплата прошла успешно, вы получите ссылку на канал в ближайшее время.\n"
+            "Если оплата не прошла, нажмите кнопку ✅ Проверить оплату для проверки статуса.",
+            reply_markup=main_menu(),
+        )
+        return
+    
     await message.answer(
         "Привет! Это тестовый бот для MVP.\nВыбери действие:",
         reply_markup=main_menu(),

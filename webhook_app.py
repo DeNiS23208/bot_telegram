@@ -289,56 +289,79 @@ async def yookassa_webhook(request: Request):
 
     try:
         notification = WebhookNotificationFactory().create(data)
-    except Exception:
+    except Exception as e:
+        print(f"❌ Ошибка создания notification: {e}")
         raise HTTPException(status_code=400, detail="Bad YooKassa notification")
 
     payment_obj = notification.object
     payment_id = payment_obj.id
     event = notification.event
+    
+    # Логируем все события для отладки
+    print(f"📥 Получено событие от ЮKassa: {event}, payment_id: {payment_id}")
 
     # Обрабатываем отмененные/неудачные платежи
     if event == "payment.canceled":
-        payment = Payment.find_one(payment_id)
-        meta = payment.metadata or {}
-        tg_user_id = meta.get("telegram_user_id")
-        
-        if tg_user_id:
-            tg_user_id = int(tg_user_id)
-            # Обновляем статус платежа в БД
-            await update_payment_status_async(payment_id, "canceled")
+        print(f"🔄 Обработка canceled платежа: {payment_id}")
+        try:
+            payment = Payment.find_one(payment_id)
+            meta = payment.metadata or {}
+            tg_user_id = meta.get("telegram_user_id")
             
-            # Определяем причину отмены
-            cancellation_reason = "неизвестная причина"
-            message_text = "❌ Платёж не был завершён\n\n"
+            print(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
             
-            # Проверяем причину отмены (если доступна в объекте платежа)
-            if hasattr(payment, 'cancellation_details') and payment.cancellation_details:
-                reason = payment.cancellation_details.get('reason', '').lower()
-                if 'insufficient' in reason or 'funds' in reason or 'недостаточно' in reason:
-                    cancellation_reason = "недостаточно средств"
-                    message_text += "💳 Недостаточно средств на карте для оплаты.\n\n"
-                elif 'user' in reason or 'отменен' in reason:
-                    cancellation_reason = "отменен пользователем"
-                    message_text += "Платёж был отменён при выходе из формы оплаты.\n\n"
-                else:
+            if tg_user_id:
+                tg_user_id = int(tg_user_id)
+                # Обновляем статус платежа в БД
+                await update_payment_status_async(payment_id, "canceled")
+                
+                # Определяем причину отмены
+                cancellation_reason = "неизвестная причина"
+                message_text = "❌ Платёж не был завершён\n\n"
+                
+                # Проверяем причину отмены (если доступна в объекте платежа)
+                try:
+                    if hasattr(payment, 'cancellation_details') and payment.cancellation_details:
+                        reason = str(payment.cancellation_details.get('reason', '')).lower()
+                        party = str(payment.cancellation_details.get('party', '')).lower()
+                        print(f"🔍 Причина отмены: reason={reason}, party={party}")
+                        
+                        if 'insufficient' in reason or 'funds' in reason or 'недостаточно' in reason or 'insufficient_funds' in reason:
+                            cancellation_reason = "недостаточно средств"
+                            message_text += "💳 Недостаточно средств на карте для оплаты.\n\n"
+                        elif 'user' in party or 'user' in reason or 'отменен' in reason or 'canceled_by_user' in reason:
+                            cancellation_reason = "отменен пользователем"
+                            message_text += "Платёж был отменён при выходе из формы оплаты.\n\n"
+                        else:
+                            message_text += "Оплата была отменена или не прошла.\n\n"
+                    else:
+                        # Если нет деталей, проверяем статус
+                        if payment.status == "canceled":
+                            message_text += "Платёж был отменён.\n\n"
+                        else:
+                            message_text += "Оплата была отменена или не прошла.\n\n"
+                except Exception as e:
+                    print(f"⚠️ Ошибка при определении причины отмены: {e}")
                     message_text += "Оплата была отменена или не прошла.\n\n"
+                
+                message_text += (
+                    "Возможные причины:\n"
+                    "• Недостаточно средств на карте\n"
+                    "• Операция была отменена\n"
+                    "• Выход из формы оплаты без завершения\n\n"
+                    "Вы можете попробовать оплатить снова, нажав кнопку 💳 Оплатить доступ."
+                )
+                
+                # Уведомляем пользователя
+                try:
+                    await bot.send_message(tg_user_id, message_text)
+                    print(f"✅ Отправлено уведомление об отмене платежа пользователю {tg_user_id}, причина: {cancellation_reason}")
+                except Exception as e:
+                    print(f"❌ Ошибка отправки уведомления об отмене платежа пользователю {tg_user_id}: {e}")
             else:
-                message_text += "Оплата была отменена или не прошла.\n\n"
-            
-            message_text += (
-                "Возможные причины:\n"
-                "• Недостаточно средств на карте\n"
-                "• Операция была отменена\n"
-                "• Выход из формы оплаты без завершения\n\n"
-                "Вы можете попробовать оплатить снова, нажав кнопку 💳 Оплатить доступ."
-            )
-            
-            # Уведомляем пользователя
-            try:
-                await bot.send_message(tg_user_id, message_text)
-                print(f"✅ Отправлено уведомление об отмене платежа пользователю {tg_user_id}, причина: {cancellation_reason}")
-            except Exception as e:
-                print(f"❌ Ошибка отправки уведомления об отмене платежа: {e}")
+                print(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id}")
+        except Exception as e:
+            print(f"❌ Ошибка обработки canceled платежа {payment_id}: {e}")
         
         return {"ok": True, "event": "payment.canceled"}
 
