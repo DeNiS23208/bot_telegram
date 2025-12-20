@@ -162,46 +162,137 @@ async def yookassa_webhook(request: Request):
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
 
-    # создаём одноразовую ссылку БЕЗ заявки - пользователь сразу попадает в канал
-    invite = await bot.create_chat_invite_link(
-        chat_id=CHANNEL_ID,
-        creates_join_request=False,  # Без заявки - прямой доступ
-        member_limit=1,  # Одноразовая ссылка - только для одного пользователя
-        expire_date=datetime.utcnow() + timedelta(hours=24)  # Действует 24 часа
-    )
+    # Пытаемся добавить пользователя напрямую в канал (если возможно)
+    try:
+        # Сначала проверяем, не забанен ли пользователь, и разбаниваем если нужно
+        await bot.unban_chat_member(
+            chat_id=CHANNEL_ID,
+            user_id=tg_user_id,
+            only_if_banned=False
+        )
+    except Exception as e:
+        # Если не получилось добавить напрямую (например, канал требует заявку), создаем ссылку
+        pass
+
+    # Создаём одноразовую ссылку БЕЗ заявки - пользователь сразу попадает в канал
+    # Если канал требует одобрения, ссылка всё равно будет работать, но заявка будет одобрена автоматически
+    try:
+        invite = await bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            creates_join_request=False,  # Без заявки - прямой доступ
+            member_limit=1,  # Одноразовая ссылка - только для одного пользователя
+            expire_date=datetime.utcnow() + timedelta(hours=24)  # Действует 24 часа
+        )
+        invite_link = invite.invite_link
+    except Exception:
+        # Если не получилось создать ссылку без заявки, создаем обычную ссылку
+        # Заявка будет автоматически одобрена через обработчик
+        invite = await bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            creates_join_request=True,  # С заявкой, но она будет автоматически одобрена
+            member_limit=1,
+            expire_date=datetime.utcnow() + timedelta(hours=24)
+        )
+        invite_link = invite.invite_link
 
     # Сохраняем информацию о ссылке в БД
-    save_invite_link(invite.invite_link, tg_user_id, payment_id)
+    save_invite_link(invite_link, tg_user_id, payment_id)
 
     await bot.send_message(
         tg_user_id,
         "✅ Оплата подтверждена!\n\n"
-        "Нажмите на ссылку ниже, чтобы сразу попасть в канал:\n"
-        f"{invite.invite_link}\n\n"
-        "⚠️ Ссылка одноразовая и персональная. После использования она станет недействительной."
+        "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
+        f"{invite_link}\n\n"
+        "⚠️ Ссылка одноразовая и персональная. Если потребуется одобрение - оно будет автоматическим."
     )
 
     mark_processed(payment_id)
     return {"ok": True, "payment_id": payment_id}
 
 
-# ================== JOIN REQUEST HANDLER ==================
-# Этот обработчик больше не нужен, так как ссылки создаются без заявки
-# Но оставляем для обратной совместимости, если кто-то случайно отправит заявку
+# ================== TELEGRAM WEBHOOK (для получения обновлений от Telegram) ==================
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """
+    Обработчик webhook от Telegram для получения обновлений (включая заявки на вступление)
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Обрабатываем заявку на вступление в канал
+    if "chat_join_request" in data:
+        try:
+            from aiogram.types import Update
+            update = Update(**data)
+            
+            if update.chat_join_request:
+                chat_join = update.chat_join_request
+                user_id = chat_join.from_user.id
+                chat_id = chat_join.chat.id
+
+                # Если пользователь оплатил - автоматически одобряем заявку
+                if is_user_allowed(user_id) and chat_id == CHANNEL_ID:
+                    try:
+                        await bot.approve_chat_join_request(
+                            chat_id=chat_id,
+                            user_id=user_id
+                        )
+                        return {"ok": True, "approved": True}
+                    except Exception as e:
+                        # Логируем ошибку, но не падаем
+                        print(f"Error approving join request: {e}")
+                        return {"ok": True, "approved": False, "error": str(e)}
+                else:
+                    # Пользователь не оплатил или это не наш канал
+                    return {"ok": True, "approved": False}
+        except Exception as e:
+            print(f"Error processing chat_join_request: {e}")
+            return {"ok": True, "error": str(e)}
+
+    return {"ok": True}
+
+
+# ================== JOIN REQUEST HANDLER (старый формат, для совместимости) ==================
 @app.post("/telegram/join_request")
 async def telegram_join_request(request: Request):
-    data = await request.json()
-    chat_join = ChatJoinRequest(**data["chat_join_request"])
+    """
+    Старый обработчик заявок (для обратной совместимости)
+    """
+    try:
+        data = await request.json()
+        
+        # Проверяем разные форматы данных
+        if "chat_join_request" in data:
+            chat_join_data = data["chat_join_request"]
+        elif isinstance(data, dict) and "from_user" in data:
+            chat_join_data = data
+        else:
+            return {"ok": True, "ignored": "unknown format"}
 
-    user_id = chat_join.from_user.id
+        user_id = chat_join_data.get("from_user", {}).get("id") or chat_join_data.get("user", {}).get("id")
+        chat_id = chat_join_data.get("chat", {}).get("id")
 
-    if is_user_allowed(user_id):
-        await bot.approve_chat_join_request(
-            chat_id=chat_join.chat.id,
-            user_id=user_id
-        )
-        return {"ok": True, "approved": True}
+        if not user_id:
+            return {"ok": True, "ignored": "no user_id"}
 
-    # не одобряем — человек не платил
-    return {"ok": True, "approved": False}
+        user_id = int(user_id)
+
+        # Если пользователь оплатил - автоматически одобряем заявку
+        if is_user_allowed(user_id) and (not chat_id or int(chat_id) == CHANNEL_ID):
+            try:
+                await bot.approve_chat_join_request(
+                    chat_id=chat_id or CHANNEL_ID,
+                    user_id=user_id
+                )
+                return {"ok": True, "approved": True}
+            except Exception as e:
+                print(f"Error approving join request: {e}")
+                return {"ok": True, "approved": False, "error": str(e)}
+
+        return {"ok": True, "approved": False}
+    except Exception as e:
+        print(f"Error in join_request handler: {e}")
+        return {"ok": True, "error": str(e)}
 

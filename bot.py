@@ -5,7 +5,7 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest
 from dotenv import load_dotenv
 
 from db import (
@@ -23,6 +23,7 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://xasanim.ru/")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -33,7 +34,27 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-BTN_PAY_1 = "💳 Оплатить доступ"
+# Импортируем функцию проверки оплативших пользователей из webhook_app
+# Для этого создадим простую функцию проверки в db.py или используем прямое подключение к БД
+import sqlite3
+DB_PATH = os.getenv("DB_PATH", "bot.db")
+
+def is_user_allowed(tg_user_id: int) -> bool:
+    """Проверяет, есть ли пользователь в списке оплативших"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM approved_users WHERE telegram_user_id = ?",
+            (tg_user_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
+
+BTN_PAY_1 = "💳 Оплатить доступ на 30 дней"
 BTN_STATUS_1 = "📌 Статус подписки"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "✅ Проверить оплату"
@@ -132,6 +153,25 @@ async def check_payment(message: Message):
         await message.answer("Платёж отменён/не оплачен ❌")
     else:
         await message.answer(f"Статус платежа: {status}")
+
+
+@dp.chat_join_request()
+async def approve_join_request(join_request: ChatJoinRequest):
+    """
+    Автоматически одобряет заявки на вступление от оплативших пользователей
+    """
+    if CHANNEL_ID and join_request.chat.id == CHANNEL_ID:
+        user_id = join_request.from_user.id
+        
+        # Проверяем, оплатил ли пользователь
+        if is_user_allowed(user_id):
+            try:
+                await join_request.approve()
+                print(f"✅ Автоматически одобрена заявка от пользователя {user_id}")
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+        else:
+            print(f"⏸️ Пользователь {user_id} не оплатил, заявка не одобрена")
 
 
 async def main():
