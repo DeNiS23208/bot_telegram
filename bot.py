@@ -225,6 +225,16 @@ async def check_payment(message: Message):
         )
 
 
+@dp.message(lambda m: (m.text or "").strip() == BTN_SUPPORT)
+async def support(message: Message):
+    """Обработчик кнопки поддержки"""
+    await message.answer(
+        "🆘 Поддержка\n\n"
+        "По всем вопросам обращайтесь к менеджеру:\n"
+        "@irina_blv"
+    )
+
+
 @dp.chat_join_request()
 async def approve_join_request(join_request: ChatJoinRequest):
     """
