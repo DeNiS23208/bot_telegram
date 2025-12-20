@@ -34,12 +34,13 @@ Configuration.secret_key = YOOKASSA_SECRET_KEY
 app = FastAPI()
 bot = Bot(token=BOT_TOKEN)
 
-# Запускаем фоновую задачу для проверки истекших платежей
+# Запускаем фоновые задачи для проверки истекших платежей и подписок
 @app.on_event("startup")
 async def startup_event():
-    """Запускаем фоновую задачу при старте приложения"""
+    """Запускаем фоновые задачи при старте приложения"""
     asyncio.create_task(check_expired_payments())
-    print("✅ Фоновая задача проверки истекших платежей запущена")
+    asyncio.create_task(check_expired_subscriptions())
+    print("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
 
 
 # Обработчик возврата с ЮKassa (если пользователь вернулся без оплаты)
@@ -236,6 +237,24 @@ async def get_expired_pending_payments():
         return rows
 
 
+async def get_expired_subscriptions():
+    """Получает список подписок, которые истекли или истекают в ближайшие 3 дня"""
+    async with aiosqlite.connect(DB_PATH) as db_conn:
+        now = datetime.utcnow()
+        # Подписки, которые истекли или истекают в течение 3 дней
+        expires_soon = (now + timedelta(days=3)).isoformat()
+        cursor = await db_conn.execute(
+            """
+            SELECT telegram_id, expires_at 
+            FROM subscriptions 
+            WHERE expires_at <= ? AND expires_at > ?
+            """,
+            (expires_soon, now.isoformat())
+        )
+        rows = await cursor.fetchall()
+        return rows
+
+
 async def check_expired_payments():
     """Проверяет истекшие платежи и уведомляет пользователей"""
     while True:
@@ -277,6 +296,73 @@ async def check_expired_payments():
         except Exception as e:
             print(f"❌ Ошибка в фоновой задаче проверки платежей: {e}")
             await asyncio.sleep(60)  # Ждем перед следующей попыткой
+
+
+async def check_expired_subscriptions():
+    """Проверяет истекшие подписки и отправляет ссылки на продление"""
+    processed_users = set()  # Чтобы не отправлять несколько раз одному пользователю
+    
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Проверяем каждый час
+            
+            # Проверяем подписки, которые истекли
+            expired_subs = await get_expired_subscriptions()
+            
+            for telegram_id, expires_at_str in expired_subs:
+                if telegram_id in processed_users:
+                    continue
+                    
+                try:
+                    expires_at = datetime.fromisoformat(expires_at_str)
+                    now = datetime.utcnow()
+                    
+                    # Если подписка уже истекла
+                    if expires_at <= now:
+                        # Создаем новую ссылку на оплату для продления
+                        from payments import create_payment
+                        
+                        RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'History_Nail_Khasanov_bot')}?start=payment_return"
+                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                        
+                        payment_id, pay_url = create_payment(
+                            amount_rub="1.00",
+                            description="Продление подписки на канал (30 дней)",
+                            return_url=RETURN_URL_WEBHOOK,
+                            customer_email=CUSTOMER_EMAIL,
+                            telegram_user_id=telegram_id,
+                        )
+                        
+                        # Сохраняем платеж
+                        async with aiosqlite.connect(DB_PATH) as db_conn:
+                            await db_conn.execute(
+                                "INSERT OR IGNORE INTO payments (telegram_id, payment_id, status, created_at) VALUES (?, ?, ?, ?)",
+                                (telegram_id, payment_id, "pending", datetime.utcnow().isoformat())
+                            )
+                            await db_conn.commit()
+                        
+                        # Отправляем уведомление
+                        await bot.send_message(
+                            telegram_id,
+                            "⏰ Ваша подписка истекла\n\n"
+                            "Для продления подписки перейдите по ссылке:\n"
+                            f"{pay_url}\n\n"
+                            "После оплаты вернитесь в бота и нажмите: ✅ Проверить оплату"
+                        )
+                        
+                        processed_users.add(telegram_id)
+                        print(f"✅ Отправлена ссылка на продление подписки пользователю {telegram_id}")
+                        
+                except Exception as e:
+                    print(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
+            
+            # Очищаем обработанных пользователей раз в день
+            if len(processed_users) > 100:
+                processed_users.clear()
+                    
+        except Exception as e:
+            print(f"❌ Ошибка в фоновой задаче проверки подписок: {e}")
+            await asyncio.sleep(3600)
 
 
 # ================== YOOKASSA WEBHOOK ==================

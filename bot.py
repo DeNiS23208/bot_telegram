@@ -23,13 +23,11 @@ from payments import create_payment, get_payment_status, get_payment_url
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "")  # Имя бота без @ (например: History_Nail_Khasanov_bot)
-# Создаем ссылку на бота для возврата после оплаты
-if BOT_USERNAME:
-    RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
-else:
-    RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+
+# Имя бота из переменной окружения или по умолчанию
+BOT_USERNAME = os.getenv("BOT_USERNAME", "History_Nail_Khasanov_bot")
+RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -132,6 +130,16 @@ async def about(message: Message):
 async def pay(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
 
+    # ПЕРВЫМ ДЕЛОМ проверяем активную подписку
+    expires_at = await get_subscription_expires_at(message.from_user.id)
+    if expires_at and expires_at > datetime.utcnow():
+        await message.answer(
+            f"✅ Подписка уже активирована!\n\n"
+            f"Действует до: {expires_at.date()}\n\n"
+            f"Если у вас нет доступа к платному каналу, обратитесь к менеджеру."
+        )
+        return
+
     # Проверяем, есть ли активный pending платеж (созданный менее 10 минут назад)
     active_payment = await get_active_pending_payment(message.from_user.id, minutes=10)
     
@@ -233,6 +241,7 @@ async def approve_join_request(join_request: ChatJoinRequest):
 
 async def main():
     await init_db()
+    await init_bot_username()  # Получаем имя бота перед запуском
     await dp.start_polling(bot)
 
 
