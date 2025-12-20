@@ -6,8 +6,12 @@ from yookassa import Configuration, Payment
 
 load_dotenv()
 
+# Настройка ЮKassa из .env
 Configuration.account_id = os.getenv("YOOKASSA_SHOP_ID")
 Configuration.secret_key = os.getenv("YOOKASSA_SECRET_KEY")
+
+if not Configuration.account_id or not Configuration.secret_key:
+    raise RuntimeError("YOOKASSA_SHOP_ID / YOOKASSA_SECRET_KEY is missing in .env")
 
 
 def create_payment(
@@ -15,13 +19,15 @@ def create_payment(
     description: str,
     return_url: str,
     customer_email: str,
-    telegram_user_id: int | None = None,
+    telegram_user_id: int,
 ):
     """
-    Создаёт платёж в ЮKassa и возвращает (payment_id, confirmation_url).
+    Создаёт платёж и возвращает (payment_id, confirmation_url)
 
-    customer_email: обязателен для чека (54-ФЗ)
-    telegram_user_id: кладём в metadata, чтобы webhook знал кому писать
+    ВАЖНО:
+    - customer_email нужен для чека (54-ФЗ)
+    - telegram_user_id кладём в metadata, чтобы webhook знал кому отправить инвайт
+    - payment_subject/payment_mode обязательны, иначе BadRequestError
     """
     idempotence_key = str(uuid.uuid4())
 
@@ -30,6 +36,10 @@ def create_payment(
         "confirmation": {"type": "redirect", "return_url": return_url},
         "capture": True,
         "description": description,
+
+        # ✅ КРИТИЧНО: это нужно webhook'у
+        "metadata": {"telegram_user_id": str(telegram_user_id)},
+
         "receipt": {
             "customer": {"email": customer_email},
             "items": [
@@ -45,9 +55,6 @@ def create_payment(
         },
     }
 
-    if telegram_user_id is not None:
-        payload["metadata"] = {"telegram_user_id": str(int(telegram_user_id))}
-
     payment = Payment.create(payload, idempotence_key)
     return payment.id, payment.confirmation.confirmation_url
 
@@ -55,3 +62,4 @@ def create_payment(
 def get_payment_status(payment_id: str) -> str:
     payment = Payment.find_one(payment_id)
     return payment.status
+

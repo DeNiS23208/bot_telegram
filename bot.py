@@ -23,6 +23,8 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", "https://xasanim.ru/")
+
+# Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
 
 if not TOKEN:
@@ -32,17 +34,9 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 BTN_PAY_1 = "💳 Оплатить доступ"
-BTN_PAY_2 = "Оплатить доступ"
-BTN_PAY_3 = "Оплатить подписку"
-
 BTN_STATUS_1 = "📌 Статус подписки"
-BTN_STATUS_2 = "Статус подписки"
-
 BTN_ABOUT_1 = "ℹ️ О проекте"
-BTN_ABOUT_2 = "О проекте"
-
 BTN_CHECK_1 = "✅ Проверить оплату"
-BTN_CHECK_2 = "Проверить оплату"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -73,7 +67,7 @@ async def cmd_start(message: Message):
     )
 
 
-@dp.message(lambda m: (m.text or "").strip() in {BTN_STATUS_1, BTN_STATUS_2})
+@dp.message(lambda m: (m.text or "").strip() == BTN_STATUS_1)
 async def sub_status(message: Message):
     expires_at = await get_subscription_expires_at(message.from_user.id)
 
@@ -88,7 +82,7 @@ async def sub_status(message: Message):
         await message.answer(f"Подписка закончилась ❌\nЗакончилась: {expires_at.date()}")
 
 
-@dp.message(lambda m: (m.text or "").strip() in {BTN_ABOUT_1, BTN_ABOUT_2})
+@dp.message(lambda m: (m.text or "").strip() == BTN_ABOUT_1)
 async def about(message: Message):
     await message.answer(
         "Это MVP Telegram-бота с доступом в закрытый канал.\n"
@@ -96,22 +90,18 @@ async def about(message: Message):
     )
 
 
-@dp.message(lambda m: (m.text or "").strip() in {BTN_PAY_1, BTN_PAY_2, BTN_PAY_3})
+@dp.message(lambda m: (m.text or "").strip() == BTN_PAY_1)
 async def pay(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
 
-    try:
-        payment_id, pay_url = await maybe_await(
-            create_payment,
-            amount_rub="10.00",
-            description="Подписка на канал (30 дней)",
-            return_url=RETURN_URL,
-            customer_email=CUSTOMER_EMAIL,
-            telegram_user_id=message.from_user.id,  # ✅ для webhook
-        )
-    except Exception as e:
-        await message.answer(f"Ошибка при создании платежа: {type(e).__name__}: {e}")
-        raise
+    payment_id, pay_url = await maybe_await(
+        create_payment,
+        amount_rub="10.00",
+        description="Подписка на канал (30 дней)",
+        return_url=RETURN_URL,
+        customer_email=CUSTOMER_EMAIL,
+        telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
+    )
 
     await save_payment(message.from_user.id, payment_id, status="pending")
 
@@ -122,7 +112,7 @@ async def pay(message: Message):
     )
 
 
-@dp.message(lambda m: (m.text or "").strip() in {BTN_CHECK_1, BTN_CHECK_2})
+@dp.message(lambda m: (m.text or "").strip() == BTN_CHECK_1)
 async def check_payment(message: Message):
     payment_id = await get_latest_payment_id(message.from_user.id)
 
@@ -130,19 +120,12 @@ async def check_payment(message: Message):
         await message.answer("Не нашёл платежей. Сначала нажмите 💳 Оплатить доступ.")
         return
 
-    try:
-        status = await maybe_await(get_payment_status, payment_id)
-    except Exception as e:
-        await message.answer(f"Ошибка при проверке платежа: {type(e).__name__}: {e}")
-        raise
-
+    status = await maybe_await(get_payment_status, payment_id)
     await update_payment_status(payment_id, status)
 
     if status == "succeeded":
         expires_at = await activate_subscription_days(message.from_user.id, days=30)
-        await message.answer(
-            f"✅ Оплата подтверждена.\nПодписка активна до: {expires_at.date()}"
-        )
+        await message.answer(f"✅ Оплата подтверждена.\nПодписка активна до: {expires_at.date()}")
     elif status in ("pending", "waiting_for_capture"):
         await message.answer("Платёж пока не завершён. Попробуйте ещё раз через минуту.")
     elif status == "canceled":
@@ -158,3 +141,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
