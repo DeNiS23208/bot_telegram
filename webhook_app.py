@@ -40,6 +40,7 @@ async def startup_event():
     """Запускаем фоновые задачи при старте приложения"""
     asyncio.create_task(check_expired_payments())
     asyncio.create_task(check_expired_subscriptions())
+    asyncio.create_task(check_subscriptions_expiring_soon())
     print("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
 
 
