@@ -373,16 +373,47 @@ async def yookassa_webhook(request: Request):
             refund_obj = notification.object
             payment_id_refund = refund_obj.payment_id if hasattr(refund_obj, 'payment_id') else None
             
+            print(f"📋 Информация о возврате: payment_id={payment_id_refund}")
+            
             if payment_id_refund:
                 # Получаем оригинальный платеж
                 payment = Payment.find_one(payment_id_refund)
                 meta = payment.metadata or {}
                 tg_user_id = meta.get("telegram_user_id")
                 
+                print(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
+                
                 if tg_user_id:
                     tg_user_id = int(tg_user_id)
-                    amount = refund_obj.amount.value if hasattr(refund_obj, 'amount') else "0"
-                    currency = refund_obj.amount.currency if hasattr(refund_obj, 'amount') else "RUB"
+                    
+                    # Получаем сумму возврата
+                    try:
+                        if hasattr(refund_obj, 'amount'):
+                            amount = refund_obj.amount.value if hasattr(refund_obj.amount, 'value') else str(refund_obj.amount.get('value', '0'))
+                            currency = refund_obj.amount.currency if hasattr(refund_obj.amount, 'currency') else refund_obj.amount.get('currency', 'RUB')
+                        else:
+                            amount = "0"
+                            currency = "RUB"
+                    except Exception as e:
+                        print(f"⚠️ Ошибка получения суммы возврата: {e}")
+                        amount = "0"
+                        currency = "RUB"
+                    
+                    # Отключаем подписку пользователя при возврате
+                    try:
+                        async with aiosqlite.connect(DB_PATH) as db_conn:
+                            await db_conn.execute(
+                                "DELETE FROM subscriptions WHERE telegram_id = ?",
+                                (tg_user_id,)
+                            )
+                            await db_conn.execute(
+                                "DELETE FROM approved_users WHERE telegram_user_id = ?",
+                                (tg_user_id,)
+                            )
+                            await db_conn.commit()
+                        print(f"✅ Подписка пользователя {tg_user_id} отменена из-за возврата")
+                    except Exception as e:
+                        print(f"⚠️ Ошибка отмены подписки: {e}")
                     
                     # Уведомляем пользователя о возврате
                     try:
@@ -391,13 +422,20 @@ async def yookassa_webhook(request: Request):
                             f"💰 Возврат средств выполнен\n\n"
                             f"Сумма возврата: {amount} {currency}\n"
                             f"ID платежа: {payment_id_refund}\n\n"
+                            f"Ваша подписка была отменена.\n"
                             f"Деньги будут возвращены на карту в течение нескольких рабочих дней."
                         )
                         print(f"✅ Отправлено уведомление о возврате пользователю {tg_user_id}")
                     except Exception as e:
-                        print(f"❌ Ошибка отправки уведомления о возврате: {e}")
+                        print(f"❌ Ошибка отправки уведомления о возврате пользователю {tg_user_id}: {e}")
+                else:
+                    print(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id_refund}")
+            else:
+                print(f"⚠️ Не удалось получить payment_id из возврата")
         except Exception as e:
             print(f"❌ Ошибка обработки refund.succeeded: {e}")
+            import traceback
+            traceback.print_exc()
         
         return {"ok": True, "event": "refund.succeeded"}
 
