@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import aiosqlite
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Request, HTTPException
@@ -55,6 +56,30 @@ def db():
             created_at TEXT NOT NULL,
             revoked INTEGER DEFAULT 0,
             FOREIGN KEY (telegram_user_id) REFERENCES approved_users(telegram_user_id)
+        )
+    """)
+    # Создаем таблицы для подписок и платежей (если их нет)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            username TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            telegram_id INTEGER PRIMARY KEY,
+            expires_at TEXT,
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            payment_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -124,6 +149,39 @@ def revoke_invite_link(invite_link: str):
     conn.close()
 
 
+async def activate_subscription(telegram_id: int, days: int = 30):
+    """Активирует подписку на N дней (асинхронная версия для webhook)"""
+    expires_at = datetime.utcnow() + timedelta(days=days)
+    
+    async with aiosqlite.connect(DB_PATH) as db_conn:
+        # гарантируем, что юзер существует
+        await db_conn.execute(
+            "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
+            (telegram_id, None, datetime.utcnow().isoformat())
+        )
+        
+        # upsert подписки
+        await db_conn.execute(
+            """
+            INSERT INTO subscriptions (telegram_id, expires_at)
+            VALUES (?, ?) ON CONFLICT(telegram_id) DO
+            UPDATE SET expires_at=excluded.expires_at
+            """,
+            (telegram_id, expires_at.isoformat())
+        )
+        await db_conn.commit()
+
+
+async def update_payment_status_async(payment_id: str, status: str):
+    """Обновляет статус платежа (асинхронная версия)"""
+    async with aiosqlite.connect(DB_PATH) as db_conn:
+        await db_conn.execute(
+            "UPDATE payments SET status = ? WHERE payment_id = ?",
+            (status, payment_id)
+        )
+        await db_conn.commit()
+
+
 # ================== YOOKASSA WEBHOOK ==================
 @app.post("/yookassa/webhook")
 async def yookassa_webhook(request: Request):
@@ -161,6 +219,12 @@ async def yookassa_webhook(request: Request):
 
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
+    
+    # Активируем подписку на 30 дней
+    await activate_subscription(tg_user_id, days=30)
+    
+    # Обновляем статус платежа в БД
+    await update_payment_status_async(payment_id, "succeeded")
 
     # Сначала проверяем и разбаниваем пользователя, если он был забанен
     try:
@@ -209,10 +273,14 @@ async def yookassa_webhook(request: Request):
     # Сохраняем информацию о ссылке в БД
     if invite_link:
         save_invite_link(invite_link, tg_user_id, payment_id)
+        
+        # Получаем дату окончания подписки для отображения
+        expires_at = datetime.utcnow() + timedelta(days=30)
 
         await bot.send_message(
             tg_user_id,
             "✅ Оплата подтверждена!\n\n"
+            f"Подписка активна до: {expires_at.date()}\n\n"
             "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
             f"{invite_link}\n\n"
             "⚠️ Ссылка одноразовая и персональная. Заявка будет одобрена автоматически."
