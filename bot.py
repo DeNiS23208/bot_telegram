@@ -65,6 +65,7 @@ BTN_PAY_1 = "💳 Оплатить доступ на 30 дней"
 BTN_STATUS_1 = "📌 Статус подписки"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "✅ Проверить оплату"
+BTN_SUPPORT = "🆘 Поддержка"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -74,6 +75,7 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_STATUS_1)],
             [KeyboardButton(text=BTN_ABOUT_1)],
             [KeyboardButton(text=BTN_CHECK_1)],
+            [KeyboardButton(text=BTN_SUPPORT)],
         ],
         resize_keyboard=True,
     )
@@ -101,7 +103,7 @@ async def cmd_start(message: Message):
         return
     
     await message.answer(
-        "Привет! Это тестовый бот для MVP.\nВыбери действие:",
+        "Здравствуйте вас приветствует бот Наиля Хасанова",
         reply_markup=main_menu(),
     )
 
