@@ -117,7 +117,7 @@ async def pay(message: Message):
 
     payment_id, pay_url = await maybe_await(
         create_payment,
-        amount_rub="10.00",
+        amount_rub="1.00",  # Тестовая сумма 1 рубль
         description="Подписка на канал (30 дней)",
         return_url=RETURN_URL,
         customer_email=CUSTOMER_EMAIL,
