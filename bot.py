@@ -30,9 +30,9 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # Имя бота из переменной окружения или по умолчанию
 # Правильное имя бота: work232_bot (без @)
 BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
-# URL для возврата из ЮKassa - ведет в бота с командой /failed_pay для мгновенного уведомления
-# Используем формат t.me/bot_username/failed_pay для прямого вызова команды
-RETURN_URL = f"https://t.me/{BOT_USERNAME}/failed_pay"
+# URL для возврата из ЮKassa - ведет в бота с параметром failed_pay для мгновенного уведомления
+# В Telegram deep links работают только через /start с параметром
+RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=failed_pay"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -351,7 +351,7 @@ async def main():
         bot_info = await bot.get_me()
         global BOT_USERNAME, RETURN_URL
         BOT_USERNAME = bot_info.username
-        RETURN_URL = f"https://t.me/{BOT_USERNAME}/failed_pay"
+        RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=failed_pay"
         print(f"✅ Имя бота получено: @{BOT_USERNAME}")
     except Exception as e:
         print(f"⚠️ Не удалось получить имя бота из API: {e}, используем из .env")
