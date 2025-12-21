@@ -232,40 +232,16 @@ async def get_latest_payment_id(telegram_id: int) -> Optional[str]:
     return row[0] if row else None
 
 
-async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Optional[tuple]:
-    """
-    Получает активный pending платеж, созданный менее N минут назад
-    Возвращает (payment_id, created_at, payment_url) или None
-    """
-    cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """
-            SELECT payment_id, created_at 
-            FROM payments 
-            WHERE telegram_id = ? 
-            AND status = 'pending' 
-            AND created_at > ?
-            ORDER BY id DESC 
-            LIMIT 1
-            """,
-            (telegram_id, cutoff_time.isoformat())
-        )
-        row = await cur.fetchone()
-    return row if row else None
-
-
-async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Optional[tuple[str, str]]:
+async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Optional[tuple[str, str, Optional[str]]]:
     """
     Получает активный pending платеж пользователя, созданный менее N минут назад
-    Возвращает (payment_id, created_at) или None
+    Возвращает (payment_id, created_at, payment_url) или None
     """
     async with aiosqlite.connect(DB_PATH) as db:
         cutoff_time = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
         cur = await db.execute(
             """
-            SELECT payment_id, created_at 
+            SELECT payment_id, created_at, payment_url 
             FROM payments 
             WHERE telegram_id = ? AND status = 'pending' AND created_at > ?
             ORDER BY id DESC LIMIT 1
@@ -273,4 +249,4 @@ async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Opt
             (telegram_id, cutoff_time)
         )
         row = await cur.fetchone()
-    return (row[0], row[1]) if row else None
+    return (row[0], row[1], row[2]) if row else None
