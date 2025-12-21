@@ -76,12 +76,22 @@ async def init_db() -> None:
                              TEXT
                              NOT
                              NULL,
+                             payment_url
+                             TEXT,
                              created_at
                              TEXT
                              NOT
                              NULL
                          )
                          """)
+        
+        # Миграция: добавляем поле payment_url, если его нет
+        try:
+            await db.execute("ALTER TABLE payments ADD COLUMN payment_url TEXT")
+            await db.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
 
         await db.commit()
 
@@ -183,13 +193,24 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> dateti
     return expires_at
 
 
-async def save_payment(telegram_id: int, payment_id: str, status: str = "pending") -> None:
+async def save_payment(telegram_id: int, payment_id: str, status: str = "pending", payment_url: str = None) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR IGNORE INTO payments (telegram_id, payment_id, status, created_at) VALUES (?, ?, ?, ?)",
-            (telegram_id, payment_id, status, datetime.utcnow().isoformat())
+            "INSERT OR IGNORE INTO payments (telegram_id, payment_id, status, payment_url, created_at) VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, payment_id, status, payment_url, datetime.utcnow().isoformat())
         )
         await db.commit()
+
+
+async def get_payment_url_from_db(payment_id: str) -> Optional[str]:
+    """Получает URL оплаты из БД по payment_id"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT payment_url FROM payments WHERE payment_id = ?",
+            (payment_id,)
+        )
+        row = await cur.fetchone()
+    return row[0] if row and row[0] else None
 
 
 async def update_payment_status(payment_id: str, status: str) -> None:
