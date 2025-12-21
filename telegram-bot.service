@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/bot_telegram
-Environment="PATH=/usr/bin:/usr/local/bin"
+Environment="PATH=/usr/bin:/usr/local/bin:/root/.local/bin"
 ExecStart=/usr/bin/python3 /opt/bot_telegram/bot.py
 Restart=always
 RestartSec=10
