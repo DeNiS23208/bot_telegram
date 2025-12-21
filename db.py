@@ -250,3 +250,23 @@ async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Opt
         )
         row = await cur.fetchone()
     return (row[0], row[1], row[2]) if row else None
+
+
+async def get_latest_pending_payment(telegram_id: int) -> Optional[tuple[str, str, Optional[str]]]:
+    """
+    Получает последний pending платеж пользователя БЕЗ ограничения по времени
+    Возвращает (payment_id, created_at, payment_url) или None
+    Используется для мгновенной отправки уведомления при возврате из оплаты
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT payment_id, created_at, payment_url 
+            FROM payments 
+            WHERE telegram_id = ? AND status = 'pending'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    return (row[0], row[1], row[2]) if row else None
