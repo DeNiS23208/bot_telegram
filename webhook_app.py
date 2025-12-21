@@ -3,6 +3,7 @@ import sqlite3
 import aiosqlite
 import asyncio
 from datetime import datetime, timedelta
+import pytz
 
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
@@ -10,6 +11,31 @@ from aiogram import Bot
 from aiogram.types import ChatJoinRequest
 from yookassa import Payment, Configuration
 from yookassa.domain.notification import WebhookNotificationFactory
+
+MoscowTz = pytz.timezone('Europe/Moscow')
+
+def format_datetime_moscow(dt: datetime) -> str:
+    """
+    Форматирует datetime в строку МСК времени в формате: "число месяц год и время по МСК"
+    Пример: "21 декабря 2025 и 19:45 по МСК"
+    """
+    # Преобразуем UTC в МСК
+    if dt.tzinfo is None:
+        dt = pytz.utc.localize(dt)
+    moscow_dt = dt.astimezone(MoscowTz)
+    
+    # Месяцы на русском
+    months = [
+        'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+        'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+    ]
+    
+    day = moscow_dt.day
+    month = months[moscow_dt.month - 1]
+    year = moscow_dt.year
+    time_str = moscow_dt.strftime('%H:%M')
+    
+    return f"{day} {month} {year} и {time_str} по МСК"
 
 load_dotenv()
 
@@ -194,6 +220,7 @@ def db():
         CREATE TABLE IF NOT EXISTS subscriptions (
             telegram_id INTEGER PRIMARY KEY,
             expires_at TEXT,
+            starts_at TEXT,
             FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
         )
     """)
@@ -273,9 +300,11 @@ def revoke_invite_link(invite_link: str):
     conn.close()
 
 
-async def activate_subscription(telegram_id: int, days: int = 30):
-    """Активирует подписку на N дней (асинхронная версия для webhook)"""
-    expires_at = datetime.utcnow() + timedelta(days=days)
+async def activate_subscription(telegram_id: int, days: int = 30) -> tuple[datetime, datetime]:
+    """Активирует подписку на N дней (асинхронная версия для webhook)
+    Возвращает (starts_at, expires_at)"""
+    starts_at = datetime.utcnow()
+    expires_at = starts_at + timedelta(days=days)
     
     async with aiosqlite.connect(DB_PATH) as db_conn:
         # гарантируем, что юзер существует
@@ -284,16 +313,18 @@ async def activate_subscription(telegram_id: int, days: int = 30):
             (telegram_id, None, datetime.utcnow().isoformat())
         )
         
-        # upsert подписки
+        # upsert подписки (сохраняем дату начала и окончания)
         await db_conn.execute(
             """
-            INSERT INTO subscriptions (telegram_id, expires_at)
-            VALUES (?, ?) ON CONFLICT(telegram_id) DO
-            UPDATE SET expires_at=excluded.expires_at
+            INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
+            VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
+            UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at
             """,
-            (telegram_id, expires_at.isoformat())
+            (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
         await db_conn.commit()
+    
+    return starts_at, expires_at
 
 
 async def update_payment_status_async(payment_id: str, status: str):
@@ -808,7 +839,7 @@ async def yookassa_webhook(request: Request):
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
     
-    # Активируем подписку на 30 дней
+    # Активируем подписку на 30 дней (starts_at, expires_at уже сохранены в activate_subscription)
     await activate_subscription(tg_user_id, days=30)
     
     # Обновляем статус платежа в БД
@@ -862,13 +893,16 @@ async def yookassa_webhook(request: Request):
     if invite_link:
         save_invite_link(invite_link, tg_user_id, payment_id)
         
-        # Получаем дату окончания подписки для отображения
-        expires_at = datetime.utcnow() + timedelta(days=30)
+        # Получаем даты начала и окончания подписки для отображения
+        starts_at, expires_at = await activate_subscription(tg_user_id, days=30)
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
 
         await bot.send_message(
             tg_user_id,
             "✅ Оплата подтверждена!\n\n"
-            f"Подписка активна до: {expires_at.date()}\n\n"
+            f"Подписка активна с: {starts_str}\n"
+            f"Подписка активна до: {expires_str}\n\n"
             "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
             f"{invite_link}\n\n"
             "⚠️ Ссылка одноразовая и персональная. Заявка будет одобрена автоматически."

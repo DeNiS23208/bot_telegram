@@ -3,10 +3,35 @@ import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional
 from dotenv import load_dotenv
+import pytz
 
 load_dotenv()
 
 DB_PATH = os.getenv("DB_PATH", "bot.db")
+MoscowTz = pytz.timezone('Europe/Moscow')
+
+def format_datetime_moscow(dt: datetime) -> str:
+    """
+    Форматирует datetime в строку МСК времени в формате: "число месяц год и время по МСК"
+    Пример: "21 декабря 2025 и 19:45 по МСК"
+    """
+    # Преобразуем UTC в МСК
+    if dt.tzinfo is None:
+        dt = pytz.utc.localize(dt)
+    moscow_dt = dt.astimezone(MoscowTz)
+    
+    # Месяцы на русском
+    months = [
+        'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+        'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+    ]
+    
+    day = moscow_dt.day
+    month = months[moscow_dt.month - 1]
+    year = moscow_dt.year
+    time_str = moscow_dt.strftime('%H:%M')
+    
+    return f"{day} {month} {year} и {time_str} по МСК"
 
 
 async def init_db() -> None:
@@ -34,6 +59,8 @@ async def init_db() -> None:
                              PRIMARY
                              KEY,
                              expires_at
+                             TEXT,
+                             starts_at
                              TEXT,
                              FOREIGN
                              KEY
@@ -108,12 +135,14 @@ async def get_subscription_expires_at(telegram_id: int) -> Optional[datetime]:
         return None
 
 
-async def activate_subscription_days(telegram_id: int, days: int = 30) -> datetime:
+async def activate_subscription_days(telegram_id: int, days: int = 30) -> tuple[datetime, datetime]:
     """
     Активирует подписку на N дней от текущего момента (UTC).
-    Если запись уже есть — обновляет expires_at.
+    Если запись уже есть — обновляет expires_at и starts_at.
+    Возвращает (starts_at, expires_at)
     """
-    expires_at = datetime.utcnow() + timedelta(days=days)
+    starts_at = datetime.utcnow()
+    expires_at = starts_at + timedelta(days=days)
 
     async with aiosqlite.connect(DB_PATH) as db:
         # гарантируем, что юзер существует
@@ -122,18 +151,36 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> dateti
             (telegram_id, None, datetime.utcnow().isoformat())
         )
 
-        # upsert подписки
+        # upsert подписки (сохраняем дату начала и окончания)
         await db.execute(
             """
-            INSERT INTO subscriptions (telegram_id, expires_at)
-            VALUES (?, ?) ON CONFLICT(telegram_id) DO
-            UPDATE SET expires_at=excluded.expires_at
+            INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
+            VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
+            UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at
             """,
-            (telegram_id, expires_at.isoformat())
+            (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
         await db.commit()
 
-    return expires_at
+    return starts_at, expires_at
+
+
+async def get_subscription_starts_at(telegram_id: int) -> Optional[datetime]:
+    """Получает дату начала подписки"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT starts_at FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+
+    if not row or not row[0]:
+        return None
+
+    try:
+        return datetime.fromisoformat(row[0])
+    except ValueError:
+        return None
 
 
 async def save_payment(telegram_id: int, payment_id: str, status: str = "pending") -> None:

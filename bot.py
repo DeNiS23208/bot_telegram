@@ -12,11 +12,13 @@ from db import (
     init_db,
     ensure_user,
     get_subscription_expires_at,
+    get_subscription_starts_at,
     activate_subscription_days,
     save_payment,
     update_payment_status,
     get_latest_payment_id,
     get_active_pending_payment,
+    format_datetime_moscow,
 )
 from payments import create_payment, get_payment_status, get_payment_url
 
@@ -130,9 +132,22 @@ async def sub_status(message: Message):
 
     now = datetime.utcnow()
     if expires_at > now:
-        await message.answer(f"Подписка активна ✅\nДействует до: {expires_at.date()}")
+        starts_at = await get_subscription_starts_at(message.from_user.id)
+        if starts_at:
+            starts_str = format_datetime_moscow(starts_at)
+            expires_str = format_datetime_moscow(expires_at)
+            await message.answer(
+                f"Подписка активна ✅\n\n"
+                f"Подписка активна с: {starts_str}\n"
+                f"Подписка активна до: {expires_str}"
+            )
+        else:
+            # Если дата начала не найдена, используем только дату окончания
+            expires_str = format_datetime_moscow(expires_at)
+            await message.answer(f"Подписка активна ✅\nПодписка активна до: {expires_str}")
     else:
-        await message.answer(f"Подписка закончилась ❌\nЗакончилась: {expires_at.date()}")
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(f"Подписка закончилась ❌\nЗакончилась: {expires_str}")
 
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_ABOUT_1)
@@ -150,9 +165,13 @@ async def pay(message: Message):
     # ПЕРВЫМ ДЕЛОМ проверяем активную подписку
     expires_at = await get_subscription_expires_at(message.from_user.id)
     if expires_at and expires_at > datetime.utcnow():
+        starts_at = await get_subscription_starts_at(message.from_user.id)
+        starts_str = format_datetime_moscow(starts_at) if starts_at else "неизвестно"
+        expires_str = format_datetime_moscow(expires_at)
         await message.answer(
             f"✅ Подписка уже активирована!\n\n"
-            f"Действует до: {expires_at.date()}\n\n"
+            f"Подписка активна с: {starts_str}\n"
+            f"Подписка активна до: {expires_str}\n\n"
             f"Если у вас нет доступа к платному каналу, обратитесь к менеджеру."
         )
         return
@@ -208,10 +227,13 @@ async def check_payment(message: Message):
     await update_payment_status(payment_id, status)
 
     if status == "succeeded":
-        expires_at = await activate_subscription_days(message.from_user.id, days=30)
+        starts_at, expires_at = await activate_subscription_days(message.from_user.id, days=30)
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
         await message.answer(
             f"✅ Оплата подтверждена!\n\n"
-            f"Подписка активна до: {expires_at.date()}\n\n"
+            f"Подписка активна с: {starts_str}\n"
+            f"Подписка активна до: {expires_str}\n\n"
             f"Если вы ещё не получили ссылку на канал, она должна прийти в ближайшее время."
         )
     elif status in ("pending", "waiting_for_capture"):
