@@ -161,9 +161,10 @@ async def pay(message: Message):
     active_payment = await get_active_pending_payment(message.from_user.id, minutes=10)
     
     if active_payment:
-        payment_id, created_at = active_payment
-        # Получаем ссылку на оплату для существующего платежа
-        pay_url = await maybe_await(get_payment_url, payment_id)
+        payment_id, created_at, pay_url = active_payment
+        # Если payment_url есть в БД, используем его, иначе получаем из API
+        if not pay_url:
+            pay_url = await maybe_await(get_payment_url, payment_id)
         
         if pay_url:
             await message.answer(

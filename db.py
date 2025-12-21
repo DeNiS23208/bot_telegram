@@ -235,7 +235,7 @@ async def get_latest_payment_id(telegram_id: int) -> Optional[str]:
 async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Optional[tuple]:
     """
     Получает активный pending платеж, созданный менее N минут назад
-    Возвращает (payment_id, created_at) или None
+    Возвращает (payment_id, created_at, payment_url) или None
     """
     cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
     
