@@ -31,8 +31,8 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # Правильное имя бота: work232_bot (без @)
 BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
 # URL webhook сервера для обработки возврата из ЮKassa
-# Сервер мгновенно отправит уведомление и редиректнет в бота
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://your-server.com")  # Нужно указать реальный URL вашего сервера
+# Используем домен xasanim.ru (можно переопределить через .env)
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://xasanim.ru")
 RETURN_URL = f"{WEBHOOK_BASE_URL}/payment/return"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
