@@ -222,7 +222,7 @@ async def pay(message: Message):
         telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
     )
 
-    await save_payment(message.from_user.id, payment_id, status="pending")
+    await save_payment(message.from_user.id, payment_id, status="pending", payment_url=pay_url)
 
     await message.answer(
         "Чтобы оплатить, перейдите по ссылке:\n"
