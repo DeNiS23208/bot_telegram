@@ -752,13 +752,15 @@ async def yookassa_webhook(request: Request):
         except Exception as e:
             print(f"⚠️ Ошибка сохранения ссылки в БД: {e}")
         
-        # Получаем дату окончания подписки для отображения
-        expires_at = datetime.utcnow() + timedelta(days=30)
+        # Получаем даты начала и окончания подписки для отображения
+        subscription_start = datetime.utcnow()
+        expires_at = subscription_start + timedelta(days=30)
 
         try:
             await bot.send_message(
                 tg_user_id,
                 "✅ Оплата подтверждена!\n\n"
+                f"Подписка активна с: {subscription_start.date()}\n"
                 f"Подписка активна до: {expires_at.date()}\n\n"
                 "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
                 f"{invite_link}\n\n"
