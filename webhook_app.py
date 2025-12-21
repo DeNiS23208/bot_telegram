@@ -56,9 +56,6 @@ async def payment_return(request: Request):
     # Получаем параметры из URL (если ЮKassa передает payment_id)
     payment_id = request.query_params.get("payment_id")
     
-    # Если payment_id не передан, пытаемся найти последний pending платеж по другим параметрам
-    # или используем альтернативный подход
-    
     # МГНОВЕННО отправляем уведомление через webhook payment.canceled
     # Но также пытаемся обработать здесь, если есть payment_id
     
@@ -122,6 +119,7 @@ async def payment_return(request: Request):
     
     # Редиректим пользователя в Telegram бота с командой /failed_pay
     # Используем формат ?start=failed_pay для deep link
+    # Бот обработает это и мгновенно отправит уведомление
     bot_username = os.getenv("BOT_USERNAME", "work232_bot")
     telegram_url = f"https://t.me/{bot_username}?start=failed_pay"
     
