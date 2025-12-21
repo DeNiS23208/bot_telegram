@@ -51,28 +51,65 @@ async def payment_return(request: Request):
     Обработчик возврата пользователя с формы оплаты ЮKassa
     Если пользователь вернулся без оплаты, проверяем статус и отправляем уведомление
     """
-    # Получаем параметры из URL (ЮKassa может передавать payment_id или другие параметры)
+    # Получаем telegram_user_id из query параметров (передается в return_url)
+    tg_user_id_param = request.query_params.get("user_id")
+    # Также пытаемся получить payment_id напрямую (если ЮKassa передает)
     payment_id = request.query_params.get("payment_id") or request.query_params.get("orderId")
     
-    print(f"📥 Получен возврат с формы оплаты: payment_id={payment_id}, query_params={dict(request.query_params)}")
+    print(f"📥 Получен возврат с формы оплаты: user_id={tg_user_id_param}, payment_id={payment_id}, query_params={dict(request.query_params)}")
     
+    tg_user_id = None
+    
+    # Если есть payment_id, получаем tg_user_id из метаданных платежа
     if payment_id:
         try:
             payment = Payment.find_one(payment_id)
             meta = payment.metadata or {}
             tg_user_id = meta.get("telegram_user_id")
-            
-            print(f"📋 Статус платежа {payment_id}: {payment.status}, tg_user_id: {tg_user_id}")
-            
-            if tg_user_id:
-                tg_user_id = int(tg_user_id)
+            print(f"📋 Получен tg_user_id из метаданных платежа: {tg_user_id}")
+        except Exception as e:
+            print(f"⚠️ Ошибка получения платежа {payment_id}: {e}")
+    
+    # Если tg_user_id не получен из платежа, используем из параметров
+    if not tg_user_id and tg_user_id_param:
+        try:
+            tg_user_id = int(tg_user_id_param)
+            print(f"📋 Использован tg_user_id из параметров: {tg_user_id}")
+        except ValueError:
+            print(f"⚠️ Неверный формат user_id: {tg_user_id_param}")
+    
+    if tg_user_id:
+        tg_user_id = int(tg_user_id)
+        
+        # Если нет payment_id, находим последний pending платеж пользователя
+        if not payment_id:
+            try:
+                from db import get_active_pending_payment
+                active_payment = await get_active_pending_payment(tg_user_id, minutes=30)
+                if active_payment:
+                    payment_id, created_at = active_payment
+                    print(f"📋 Найден последний pending платеж: {payment_id}")
+            except Exception as e:
+                print(f"⚠️ Ошибка поиска последнего платежа: {e}")
+                payment_id = None
+        
+        # Если есть payment_id, проверяем статус платежа
+        if payment_id:
+            try:
+                payment = Payment.find_one(payment_id)
+                current_status = payment.status
+                print(f"📋 Статус платежа {payment_id}: {current_status}")
                 
                 # Если платеж все еще pending, значит пользователь не оплатил (вышел из формы)
-                if payment.status == "pending":
+                if current_status == "pending":
                     # Проверяем, есть ли активная подписка
                     has_active = await has_active_subscription(tg_user_id)
                     
                     if not has_active:
+                        # Помечаем платеж как обработанный (меняем статус), чтобы фоновая задача не отправляла уведомление об истечении
+                        # Но НЕ меняем статус на canceled, чтобы можно было оплатить позже
+                        # Вместо этого просто отправляем уведомление
+                        
                         # Отправляем уведомление о том, что оплата не была завершена
                         try:
                             await bot.send_message(
@@ -82,30 +119,40 @@ async def payment_return(request: Request):
                                 "Для оплаты доступа нажмите кнопку 💳 Оплатить доступ и перейдите по новой ссылке."
                             )
                             print(f"✅ Отправлено уведомление о незавершенной оплате пользователю {tg_user_id}")
+                            # Помечаем, что уведомление отправлено (обновляем статус на "canceled" чтобы фоновая задача пропустила)
+                            await update_payment_status_async(payment_id, "canceled")
                         except Exception as e:
                             print(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
                     else:
                         print(f"ℹ️ Пользователь {tg_user_id} вернулся с формы оплаты, но у него уже есть активная подписка")
                 
-                # Если платеж отменен, webhook должен был обработать это, но на всякий случай проверяем
-                elif payment.status == "canceled":
+                # Если платеж отменен, webhook должен был обработать это
+                elif current_status == "canceled":
                     has_active = await has_active_subscription(tg_user_id)
                     if not has_active:
-                        try:
-                            await bot.send_message(
-                                tg_user_id,
-                                "❌ Платёж был отменён\n\n"
-                                "Вы вышли из формы оплаты без завершения платежа.\n\n"
-                                "Для оплаты доступа нажмите кнопку 💳 Оплатить доступ и перейдите по новой ссылке."
-                            )
-                            print(f"✅ Отправлено уведомление об отмене платежа пользователю {tg_user_id} (через return)")
-                        except Exception as e:
-                            print(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
-                
-        except Exception as e:
-            print(f"❌ Ошибка обработки возврата: {e}")
-            import traceback
-            traceback.print_exc()
+                        # Уже должен был быть обработан через webhook, но на всякий случай проверим
+                        print(f"ℹ️ Платеж {payment_id} уже отменен, webhook должен был обработать")
+                        
+            except Exception as e:
+                print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # Если не нашли платеж, все равно отправляем уведомление
+            has_active = await has_active_subscription(tg_user_id)
+            if not has_active:
+                try:
+                    await bot.send_message(
+                        tg_user_id,
+                        "❌ Платёж не был завершён\n\n"
+                        "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                        "Для оплаты доступа нажмите кнопку 💳 Оплатить доступ и перейдите по новой ссылке."
+                    )
+                    print(f"✅ Отправлено уведомление пользователю {tg_user_id} (платеж не найден)")
+                except Exception as e:
+                    print(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
+    else:
+        print(f"⚠️ Не удалось определить telegram_user_id для обработки возврата")
     
     # Возвращаем простую страницу или редирект
     return {"status": "ok", "message": "Вы вернулись с формы оплаты"}
@@ -281,15 +328,17 @@ async def has_active_subscription(telegram_id: int) -> bool:
 async def get_expired_pending_payments():
     """Получает список платежей со статусом pending, которые старше 10 минут"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
-        # Платежи старше 10 минут со статусом pending
+        # Платежи старше 10 минут со статусом pending (НЕ canceled и НЕ expired)
         cutoff_time = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
         cursor = await db_conn.execute(
             """
             SELECT telegram_id, payment_id, created_at 
             FROM payments 
-            WHERE status = 'pending' AND created_at < ?
+            WHERE status = 'pending' 
+            AND created_at < ?
+            AND created_at > ?
             """,
-            (cutoff_time,)
+            (cutoff_time, (datetime.utcnow() - timedelta(hours=24)).isoformat())  # Только за последние 24 часа
         )
         rows = await cursor.fetchall()
         return rows

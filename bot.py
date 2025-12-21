@@ -32,10 +32,17 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
 # Если не указан в env, используем домен с портом 8000
 YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL")
 if YOOKASSA_RETURN_URL:
-    RETURN_URL = YOOKASSA_RETURN_URL.rstrip('/') + "/payment/return"
+    RETURN_URL_BASE = YOOKASSA_RETURN_URL.rstrip('/') + "/payment/return"
 else:
     # Fallback на Telegram бота, если webhook URL не указан
-    RETURN_URL = f"https://t.me/{BOT_USERNAME}"
+    RETURN_URL_BASE = f"https://t.me/{BOT_USERNAME}"
+
+# Функция для формирования return_url с user_id
+def get_return_url(telegram_user_id: int) -> str:
+    """Формирует return_url с telegram_user_id для обработки возврата"""
+    if YOOKASSA_RETURN_URL:
+        return f"{RETURN_URL_BASE}?user_id={telegram_user_id}"
+    return RETURN_URL_BASE
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -169,11 +176,12 @@ async def pay(message: Message):
             return
     
     # Создаем новый платеж, если активного нет
+    return_url_with_user = get_return_url(message.from_user.id)
     payment_id, pay_url = await maybe_await(
         create_payment,
         amount_rub="1.00",  # Тестовая сумма 1 рубль
         description="Подписка на канал (30 дней)",
-        return_url=RETURN_URL,
+        return_url=return_url_with_user,
         customer_email=CUSTOMER_EMAIL,
         telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
     )
