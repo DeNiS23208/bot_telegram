@@ -108,6 +108,29 @@ async def get_subscription_expires_at(telegram_id: int) -> Optional[datetime]:
         return None
 
 
+async def get_subscription_activated_at(telegram_id: int) -> Optional[datetime]:
+    """Получает дату активации подписки"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Проверяем, есть ли поле activated_at в таблице
+        try:
+            cur = await db.execute(
+                "SELECT activated_at FROM subscriptions WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            row = await cur.fetchone()
+            
+            if not row or not row[0]:
+                return None
+            
+            try:
+                return datetime.fromisoformat(row[0])
+            except ValueError:
+                return None
+        except Exception:
+            # Если поле activated_at не существует, возвращаем None
+            return None
+
+
 async def activate_subscription_days(telegram_id: int, days: int = 30) -> datetime:
     """
     Активирует подписку на N дней от текущего момента (UTC).
