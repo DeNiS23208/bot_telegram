@@ -325,7 +325,7 @@ async def main():
         bot_info = await bot.get_me()
         global BOT_USERNAME, RETURN_URL
         BOT_USERNAME = bot_info.username
-        RETURN_URL = f"https://t.me/{BOT_USERNAME}"
+        RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
         print(f"✅ Имя бота получено: @{BOT_USERNAME}")
     except Exception as e:
         print(f"⚠️ Не удалось получить имя бота из API: {e}, используем из .env")
