@@ -49,7 +49,7 @@ async def startup_event():
 async def payment_return(request: Request):
     """
     Обработчик возврата пользователя с формы оплаты ЮKassa
-    Если пользователь вернулся без оплаты, проверяем статус и отправляем уведомление
+    Если пользователь вернулся без оплаты, проверяем статус и отправляем уведомление через Telegram
     """
     # Получаем параметры из URL (если ЮKassa передает payment_id)
     payment_id = request.query_params.get("payment_id")
@@ -117,8 +117,13 @@ async def payment_return(request: Request):
             import traceback
             traceback.print_exc()
     
-    # Возвращаем простую страницу или редирект
-    return {"status": "ok", "message": "Вы вернулись с формы оплаты"}
+    # Редиректим пользователя в Telegram бота
+    # Получаем имя бота из переменной окружения
+    bot_username = os.getenv("BOT_USERNAME", "work232_bot")
+    telegram_url = f"https://t.me/{bot_username}"
+    
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=telegram_url)
 
 # ================== DB ==================
 def db():
