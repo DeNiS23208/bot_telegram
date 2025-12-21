@@ -30,9 +30,10 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # Имя бота из переменной окружения или по умолчанию
 # Правильное имя бота: work232_bot (без @)
 BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
-# URL для возврата из ЮKassa - ведет в бота с параметром failed_pay для мгновенного уведомления
-# В Telegram deep links работают только через /start с параметром
-RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=failed_pay"
+# URL webhook сервера для обработки возврата из ЮKassa
+# Сервер мгновенно отправит уведомление и редиректнет в бота
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://your-server.com")  # Нужно указать реальный URL вашего сервера
+RETURN_URL = f"{WEBHOOK_BASE_URL}/payment/return"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
