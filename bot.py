@@ -29,9 +29,8 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # Имя бота из переменной окружения или по умолчанию
 # Правильное имя бота: work232_bot (без @)
 BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
-# Используем простую ссылку на бота без параметров, так как параметры могут не работать в некоторых случаях
-# Пользователь все равно попадет в бота и может нажать кнопку "Проверить оплату"
-RETURN_URL = f"https://t.me/{BOT_USERNAME}"
+# URL для возврата из ЮKassa - ведет в бота, но с параметром для определения возврата из оплаты
+RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -94,53 +93,56 @@ async def cmd_start(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
     
     # Обрабатываем возврат после оплаты через deep link
-    # Формат: /start payment_exit_{payment_id}
-    if message.text and message.text.startswith("/start payment_exit_"):
-        payment_id = message.text.replace("/start payment_exit_", "").strip()
-        
+    # Формат: /start payment_return
+    if message.text and "payment_return" in message.text:
+        # Пользователь вернулся из ЮKassa - проверяем последний pending платеж
         try:
-            # Проверяем статус платежа
-            status = await maybe_await(get_payment_status, payment_id)
-            await update_payment_status(payment_id, status)
+            # Проверяем последний pending платеж, созданный в последние 5 минут
+            active_payment = await get_active_pending_payment(message.from_user.id, minutes=5)
             
-            # Проверяем, есть ли активная подписка
-            expires_at = await get_subscription_expires_at(message.from_user.id)
-            has_active = expires_at and expires_at > datetime.utcnow()
-            
-            # Если платеж pending или canceled и нет активной подписки - отправляем уведомление
-            if status in ("pending", "canceled") and not has_active:
-                # Получаем ссылку на оплату из БД
-                from db import get_payment_url_from_db
-                payment_url = await get_payment_url_from_db(payment_id)
+            if active_payment:
+                payment_id, created_at, payment_url = active_payment
                 
-                # Если ссылка не найдена в БД, получаем её из API
-                if not payment_url:
-                    try:
-                        payment_url = await maybe_await(get_payment_url, payment_id)
-                    except Exception:
-                        payment_url = None
+                # Проверяем статус платежа
+                status = await maybe_await(get_payment_status, payment_id)
+                await update_payment_status(payment_id, status)
                 
-                # Формируем сообщение с ссылкой
-                if payment_url:
-                    exit_message = (
-                        "❌ Оплата не произведена\n\n"
-                        "Вы вышли из формы оплаты без завершения платежа.\n\n"
-                        "Воспользуйтесь ссылкой, сформированной при нажатии 'Оплатить доступ на 30 дней':\n"
-                        f"{payment_url}\n\n"
-                        "⚠️ Ссылка действительна 10 минут с момента создания."
-                    )
-                else:
-                    exit_message = (
-                        "❌ Оплата не произведена\n\n"
-                        "Вы вышли из формы оплаты без завершения платежа.\n\n"
-                        "Для оплаты нажмите кнопку 💳 Оплатить доступ на 30 дней и перейдите по новой ссылке."
-                    )
+                # Проверяем, есть ли активная подписка
+                expires_at = await get_subscription_expires_at(message.from_user.id)
+                has_active = expires_at and expires_at > datetime.utcnow()
                 
-                await message.answer(exit_message, reply_markup=main_menu())
-                return
+                # Если платеж pending или canceled и нет активной подписки - отправляем уведомление
+                if status in ("pending", "canceled") and not has_active:
+                    # Если ссылка не найдена в БД, получаем её из API
+                    if not payment_url:
+                        try:
+                            payment_url = await maybe_await(get_payment_url, payment_id)
+                        except Exception:
+                            payment_url = None
+                    
+                    # Формируем сообщение с ссылкой
+                    if payment_url:
+                        exit_message = (
+                            "❌ Оплата не произведена\n\n"
+                            "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                            "Воспользуйтесь ссылкой, сформированной при нажатии 'Оплатить доступ на 30 дней':\n"
+                            f"{payment_url}\n\n"
+                            "⚠️ Ссылка действительна 10 минут с момента создания."
+                        )
+                    else:
+                        exit_message = (
+                            "❌ Оплата не произведена\n\n"
+                            "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                            "Для оплаты нажмите кнопку 💳 Оплатить доступ на 30 дней и перейдите по новой ссылке."
+                        )
+                    
+                    await message.answer(exit_message, reply_markup=main_menu())
+                    return
         
         except Exception as e:
             print(f"Ошибка при обработке возврата из оплаты: {e}")
+            import traceback
+            traceback.print_exc()
             # Продолжаем выполнение, показываем обычное приветствие
     
     await message.answer(
