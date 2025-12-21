@@ -662,30 +662,43 @@ async def yookassa_webhook(request: Request):
     if event != "payment.succeeded":
         return {"ok": True, "event": event}
 
+    print(f"📥 Получено событие payment.succeeded для payment_id: {payment_id}")
+
     if already_processed(payment_id):
+        print(f"⚠️ Платеж {payment_id} уже был обработан ранее")
         return {"ok": True, "duplicate": True}
 
     payment = Payment.find_one(payment_id)
+    print(f"📋 Статус платежа из ЮKassa: {payment.status}")
+    
     if payment.status != "succeeded":
+        print(f"⚠️ Платеж {payment_id} имеет статус {payment.status}, пропускаем")
         return {"ok": True, "ignored": payment.status}
 
     meta = payment.metadata or {}
     tg_user_id = meta.get("telegram_user_id")
+    
+    print(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
 
     if not tg_user_id:
+        print(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id}")
         mark_processed(payment_id)
         return {"ok": True, "ignored": "no telegram_user_id"}
 
     tg_user_id = int(tg_user_id)
+    print(f"✅ Обрабатываем платеж для пользователя {tg_user_id}")
 
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
+    print(f"✅ Пользователь {tg_user_id} добавлен в approved_users")
     
     # Активируем подписку на 30 дней
     await activate_subscription(tg_user_id, days=30)
+    print(f"✅ Подписка активирована для пользователя {tg_user_id}")
     
     # Обновляем статус платежа в БД
     await update_payment_status_async(payment_id, "succeeded")
+    print(f"✅ Статус платежа обновлен в БД")
 
     # Сначала проверяем и разбаниваем пользователя, если он был забанен
     try:
@@ -733,19 +746,31 @@ async def yookassa_webhook(request: Request):
 
     # Сохраняем информацию о ссылке в БД
     if invite_link:
-        save_invite_link(invite_link, tg_user_id, payment_id)
+        try:
+            save_invite_link(invite_link, tg_user_id, payment_id)
+            print(f"✅ Ссылка сохранена в БД: {invite_link}")
+        except Exception as e:
+            print(f"⚠️ Ошибка сохранения ссылки в БД: {e}")
         
         # Получаем дату окончания подписки для отображения
         expires_at = datetime.utcnow() + timedelta(days=30)
 
-        await bot.send_message(
-            tg_user_id,
-            "✅ Оплата подтверждена!\n\n"
-            f"Подписка активна до: {expires_at.date()}\n\n"
-            "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
-            f"{invite_link}\n\n"
-            "⚠️ Ссылка одноразовая и персональная. Заявка будет одобрена автоматически."
-        )
+        try:
+            await bot.send_message(
+                tg_user_id,
+                "✅ Оплата подтверждена!\n\n"
+                f"Подписка активна до: {expires_at.date()}\n\n"
+                "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
+                f"{invite_link}\n\n"
+                "⚠️ ВНИМАНИЕ: Ссылка одноразовая и персональная. Не передавайте её другим людям!"
+            )
+            print(f"✅ Сообщение со ссылкой отправлено пользователю {tg_user_id}")
+        except Exception as e:
+            print(f"❌ Ошибка отправки сообщения пользователю {tg_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print(f"❌ Не удалось создать invite_link для пользователя {tg_user_id}")
 
     mark_processed(payment_id)
     return {"ok": True, "payment_id": payment_id}
