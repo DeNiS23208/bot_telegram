@@ -150,15 +150,34 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> dateti
             (telegram_id, None, datetime.utcnow().isoformat())
         )
 
-        # upsert подписки
-        await db.execute(
-            """
-            INSERT INTO subscriptions (telegram_id, expires_at)
-            VALUES (?, ?) ON CONFLICT(telegram_id) DO
-            UPDATE SET expires_at=excluded.expires_at
-            """,
-            (telegram_id, expires_at.isoformat())
+        # Проверяем, есть ли уже подписка
+        cur = await db.execute(
+            "SELECT activated_at FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
         )
+        existing = await cur.fetchone()
+        
+        if existing and existing[0]:
+            # Если подписка уже была, сохраняем старую дату активации
+            await db.execute(
+                """
+                UPDATE subscriptions 
+                SET expires_at = ?
+                WHERE telegram_id = ?
+                """,
+                (expires_at.isoformat(), telegram_id)
+            )
+        else:
+            # Если подписки не было, создаем новую с датой активации
+            now = datetime.utcnow()
+            await db.execute(
+                """
+                INSERT INTO subscriptions (telegram_id, activated_at, expires_at)
+                VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
+                UPDATE SET expires_at=excluded.expires_at, activated_at=COALESCE(subscriptions.activated_at, excluded.activated_at)
+                """,
+                (telegram_id, now.isoformat(), expires_at.isoformat())
+            )
         await db.commit()
 
     return expires_at
