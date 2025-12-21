@@ -145,12 +145,16 @@ async def pay(message: Message):
 
     # ПЕРВЫМ ДЕЛОМ проверяем активную подписку
     expires_at = await get_subscription_expires_at(message.from_user.id)
+    activated_at = await get_subscription_activated_at(message.from_user.id)
+    
     if expires_at and expires_at > datetime.utcnow():
-        await message.answer(
-            f"✅ Подписка уже активирована!\n\n"
-            f"Действует до: {expires_at.date()}\n\n"
-            f"Если у вас нет доступа к платному каналу, обратитесь к менеджеру."
-        )
+        # Подписка активна
+        message_text = "Подписка уже активирована!\n\n"
+        if activated_at:
+            message_text += f"Действует с: {activated_at.date()}\n"
+        message_text += f"Действует до: {expires_at.date()}\n\n"
+        message_text += "Если у вас нет доступа к платному каналу, обратитесь к менеджеру."
+        await message.answer(message_text)
         return
 
     # Проверяем, есть ли активный pending платеж (созданный менее 10 минут назад)
