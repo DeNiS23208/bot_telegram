@@ -21,7 +21,8 @@ from db import (
 from payments import create_payment, get_payment_status, get_payment_url
 
 load_dotenv()
-
+os.get.env("YOOKASSA_RETURN_URL")
+os
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
@@ -111,6 +112,7 @@ async def cmd_start(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_STATUS_1)
 async def sub_status(message: Message):
     expires_at = await get_subscription_expires_at(message.from_user.id)
+    activated_at = await get_subscription_activated_at(message.from_user.id)
 
     if not expires_at:
         await message.answer("Подписка не активна ❌")
@@ -118,7 +120,13 @@ async def sub_status(message: Message):
 
     now = datetime.utcnow()
     if expires_at > now:
-        await message.answer(f"Подписка активна ✅\nДействует до: {expires_at.date()}")
+        # Подписка активна
+        message_text = "Подписка уже активирована!\n\n"
+        if activated_at:
+            message_text += f"Действует с: {activated_at.date()}\n"
+        message_text += f"Действует до: {expires_at.date()}\n\n"
+        message_text += "Если у вас нет доступа к платному каналу, обратитесь к менеджеру."
+        await message.answer(message_text)
     else:
         await message.answer(f"Подписка закончилась ❌\nЗакончилась: {expires_at.date()}")
 
