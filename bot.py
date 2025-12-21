@@ -31,7 +31,8 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # Правильное имя бота: work232_bot (без @)
 BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
 # URL для возврата из ЮKassa - ведет в бота с командой /failed_pay для мгновенного уведомления
-RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=failed_pay"
+# Используем формат t.me/bot_username/failed_pay для прямого вызова команды
+RETURN_URL = f"https://t.me/{BOT_USERNAME}/failed_pay"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -168,8 +169,9 @@ async def cmd_failed_pay(message: Message):
 async def cmd_start(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
     
-    # Обрабатываем deep link /start failed_pay
-    if message.text and "failed_pay" in message.text:
+    # Обрабатываем deep link /start failed_pay или /failed_pay
+    # Если в параметрах start есть failed_pay, перенаправляем на обработчик /failed_pay
+    if message.text and ("failed_pay" in message.text or message.text == "/start failed_pay"):
         # Перенаправляем на обработчик /failed_pay
         await cmd_failed_pay(message)
         return
