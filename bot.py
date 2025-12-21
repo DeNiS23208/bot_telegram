@@ -89,9 +89,90 @@ async def maybe_await(func, *args, **kwargs):
     return result
 
 
+@dp.message(Command("failed_pay"))
+async def cmd_failed_pay(message: Message):
+    """Обработчик команды /failed_pay - мгновенное уведомление о неудачной оплате"""
+    await ensure_user(message.from_user.id, message.from_user.username)
+    
+    print(f"🔄 МГНОВЕННО: Получена команда /failed_pay от пользователя {message.from_user.id}")
+    # Пользователь вернулся из ЮKassa - МГНОВЕННО отправляем уведомление
+    try:
+        # Проверяем последний pending платеж БЕЗ ограничения по времени
+        latest_payment = await get_latest_pending_payment(message.from_user.id)
+        
+        print(f"📋 Последний pending платеж: {latest_payment}")
+        
+        if latest_payment:
+            payment_id, created_at, payment_url = latest_payment
+            print(f"✅ Найден pending платеж: payment_id={payment_id}, payment_url={payment_url}")
+            
+            # МГНОВЕННО получаем ссылку, если её нет в БД
+            if not payment_url:
+                print(f"⚠️ payment_url не найден в БД, получаем из API...")
+                try:
+                    payment_url = await maybe_await(get_payment_url, payment_id)
+                    print(f"✅ Получена ссылка из API: {payment_url}")
+                except Exception as e:
+                    print(f"❌ Ошибка получения ссылки из API: {e}")
+                    payment_url = None
+            
+            # Формируем сообщение с ссылкой
+            if payment_url:
+                exit_message = (
+                    "❌ Оплата не произведена\n\n"
+                    "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                    "Воспользуйтесь ссылкой, сформированной при нажатии 'Оплатить доступ на 30 дней':\n"
+                    f"{payment_url}\n\n"
+                    "⚠️ Ссылка действительна 10 минут с момента создания."
+                )
+            else:
+                exit_message = (
+                    "❌ Оплата не произведена\n\n"
+                    "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                    "Для оплаты нажмите кнопку 💳 Оплатить доступ на 30 дней и перейдите по новой ссылке."
+                )
+            
+            # МГНОВЕННО отправляем уведомление (ПЕРВЫМ ДЕЛОМ, до всего остального)
+            print(f"📤 МГНОВЕННО отправляем уведомление пользователю {message.from_user.id}")
+            await message.answer(exit_message, reply_markup=main_menu())
+            print(f"✅ МГНОВЕННО отправлено уведомление пользователю {message.from_user.id}")
+            return
+        else:
+            print(f"⚠️ Не найден pending платеж для пользователя {message.from_user.id}, отправляем общее уведомление")
+            # Даже если платеж не найден, отправляем уведомление
+            exit_message = (
+                "❌ Оплата не произведена\n\n"
+                "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                "Для оплаты нажмите кнопку 💳 Оплатить доступ на 30 дней и перейдите по новой ссылке."
+            )
+            await message.answer(exit_message, reply_markup=main_menu())
+            return
+    
+    except Exception as e:
+        print(f"❌ Ошибка при обработке /failed_pay: {e}")
+        import traceback
+        traceback.print_exc()
+        # Даже при ошибке отправляем уведомление
+        try:
+            exit_message = (
+                "❌ Оплата не произведена\n\n"
+                "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                "Для оплаты нажмите кнопку 💳 Оплатить доступ на 30 дней и перейдите по новой ссылке."
+            )
+            await message.answer(exit_message, reply_markup=main_menu())
+        except:
+            pass
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
+    
+    # Обрабатываем deep link /start failed_pay
+    if message.text and "failed_pay" in message.text:
+        # Перенаправляем на обработчик /failed_pay
+        await cmd_failed_pay(message)
+        return
     
     await message.answer(
         "Здравствуйте вас приветствует бот Наиля Хасанова",
@@ -268,7 +349,7 @@ async def main():
         bot_info = await bot.get_me()
         global BOT_USERNAME, RETURN_URL
         BOT_USERNAME = bot_info.username
-        RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=payment_return"
+        RETURN_URL = f"https://t.me/{BOT_USERNAME}?start=failed_pay"
         print(f"✅ Имя бота получено: @{BOT_USERNAME}")
     except Exception as e:
         print(f"⚠️ Не удалось получить имя бота из API: {e}, используем из .env")
