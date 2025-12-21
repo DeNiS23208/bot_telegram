@@ -190,43 +190,24 @@ def revoke_invite_link(invite_link: str):
 
 async def activate_subscription(telegram_id: int, days: int = 30):
     """Активирует подписку на N дней (асинхронная версия для webhook)"""
-    now = datetime.utcnow()
-    expires_at = now + timedelta(days=days)
+    expires_at = datetime.utcnow() + timedelta(days=days)
     
     async with aiosqlite.connect(DB_PATH) as db_conn:
         # гарантируем, что юзер существует
         await db_conn.execute(
             "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
-            (telegram_id, None, now.isoformat())
+            (telegram_id, None, datetime.utcnow().isoformat())
         )
         
-        # Проверяем, есть ли уже подписка
-        cur = await db_conn.execute(
-            "SELECT activated_at FROM subscriptions WHERE telegram_id = ?",
-            (telegram_id,)
+        # upsert подписки
+        await db_conn.execute(
+            """
+            INSERT INTO subscriptions (telegram_id, expires_at)
+            VALUES (?, ?) ON CONFLICT(telegram_id) DO
+            UPDATE SET expires_at=excluded.expires_at
+            """,
+            (telegram_id, expires_at.isoformat())
         )
-        existing = await cur.fetchone()
-        
-        if existing and existing[0]:
-            # Если подписка уже была, сохраняем старую дату активации
-            await db_conn.execute(
-                """
-                UPDATE subscriptions 
-                SET expires_at = ?
-                WHERE telegram_id = ?
-                """,
-                (expires_at.isoformat(), telegram_id)
-            )
-        else:
-            # Если подписки не было, создаем новую с датой активации
-            await db_conn.execute(
-                """
-                INSERT INTO subscriptions (telegram_id, activated_at, expires_at)
-                VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
-                UPDATE SET expires_at=excluded.expires_at, activated_at=COALESCE(subscriptions.activated_at, excluded.activated_at)
-                """,
-                (telegram_id, now.isoformat(), expires_at.isoformat())
-            )
         await db_conn.commit()
 
 
