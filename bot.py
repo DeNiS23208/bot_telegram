@@ -12,6 +12,7 @@ from db import (
     init_db,
     ensure_user,
     get_subscription_expires_at,
+    get_subscription_activated_at,
     activate_subscription_days,
     save_payment,
     update_payment_status,
@@ -21,8 +22,7 @@ from db import (
 from payments import create_payment, get_payment_status, get_payment_url
 
 load_dotenv()
-os.get.env("YOOKASSA_RETURN_URL")
-os
+
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
