@@ -208,11 +208,15 @@ async def check_payment(message: Message):
 
     if status == "succeeded":
         expires_at = await activate_subscription_days(message.from_user.id, days=30)
-        await message.answer(
-            f"✅ Оплата подтверждена!\n\n"
-            f"Подписка активна до: {expires_at.date()}\n\n"
-            f"Если вы ещё не получили ссылку на канал, она должна прийти в ближайшее время."
-        )
+        activated_at = await get_subscription_activated_at(message.from_user.id)
+        
+        message_text = "✅ Оплата подтверждена!\n\n"
+        if activated_at:
+            message_text += f"Действует с: {activated_at.date()}\n"
+        message_text += f"Действует до: {expires_at.date()}\n\n"
+        message_text += "Если вы ещё не получили ссылку на канал, она должна прийти в ближайшее время."
+        
+        await message.answer(message_text)
     elif status in ("pending", "waiting_for_capture"):
         await message.answer(
             "⏳ Платёж пока не завершён\n\n"
