@@ -33,6 +33,8 @@ async def init_db() -> None:
                              INTEGER
                              PRIMARY
                              KEY,
+                             activated_at
+                             TEXT,
                              expires_at
                              TEXT,
                              FOREIGN
@@ -45,6 +47,14 @@ async def init_db() -> None:
                          )
                              )
                          """)
+        
+        # Миграция: добавляем поле activated_at, если его нет
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN activated_at TEXT")
+            await db.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
         await db.execute("""
                          CREATE TABLE IF NOT EXISTS payments
                          (
