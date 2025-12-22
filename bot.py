@@ -5,7 +5,7 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 from db import (
@@ -230,11 +230,25 @@ async def pay(message: Message):
 
     await save_payment(message.from_user.id, payment_id, status="pending")
 
+    # Создаем кнопку оплаты с URL
+    pay_button = InlineKeyboardButton(text="Оплатить ❤️", url=pay_url)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
+
+    # Формируем сообщение с информацией о подписке
+    subscription_text = (
+        "Стоимость подписки\n\n"
+        "1 месяц — 1 рубль\n\n"
+        "Продление подписки происходит автоматически — каждые 30 дней.\n\n"
+        'Нажимая "Оплатить", вы даете согласие на регулярные списания, на обработку '
+        '<a href="https://example.com/privacy">персональных данных</a> и принимаете условия '
+        '<a href="https://example.com/offer">публичной оферты</a>.\n\n'
+        "Получить доступ в закрытый канал"
+    )
+
     await message.answer(
-        "Чтобы оплатить, перейдите по ссылке:\n"
-        f"{pay_url}\n\n"
-        "После оплаты вернитесь сюда и нажмите: ✅ Проверить оплату\n\n"
-        "⚠️ Ссылка действительна 10 минут."
+        subscription_text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
     )
 
 
