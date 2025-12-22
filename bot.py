@@ -237,7 +237,7 @@ async def pay(message: Message):
     # Если магазин не настроен для автоплатежей, платеж будет создан без этого параметра
     payment_id, pay_url = await maybe_await(
         create_payment,
-        amount_rub="1.00",  # Тестовая сумма 1 рубль
+        amount_rub="1990.00",  # Временно для теста: 1990 рублей
         description="Подписка на канал (30 дней)",
         return_url=return_url_with_user,
         customer_email=CUSTOMER_EMAIL,
