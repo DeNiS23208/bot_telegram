@@ -391,6 +391,30 @@ async def auto_renewal_toggle(message: Message):
                 )
 
 
+@dp.message(lambda m: (m.text or "").strip() == BTN_DISABLE_AUTO)
+async def disable_auto_renewal(message: Message):
+    """Обработчик кнопки отключения автопродления (временная для скриншотов)"""
+    user_id = message.from_user.id
+    
+    # Проверяем текущий статус автопродления
+    current_status = await is_auto_renewal_enabled(user_id)
+    
+    if not current_status:
+        await message.answer(
+            "ℹ️ Автопродление уже отключено.",
+            reply_markup=await main_menu(user_id)
+        )
+        return
+    
+    # Отключаем автопродление
+    await set_auto_renewal(user_id, False)
+    await message.answer(
+        "❌ Автопродление подписки отключено\n\n"
+        "Ваша подписка не будет автоматически продлеваться.",
+        reply_markup=await main_menu(user_id)
+    )
+
+
 @dp.message(lambda m: (m.text or "").strip() == BTN_UNLINK_CARD)
 async def unlink_card(message: Message):
     """Обработчик кнопки отвязки карты"""
