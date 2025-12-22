@@ -216,6 +216,8 @@ async def pay(message: Message):
     
     # Создаем новый платеж, если активного нет
     return_url_with_user = get_return_url(message.from_user.id)
+    # Пытаемся создать платеж с возможностью сохранения способа оплаты для автопродления
+    # Если магазин не настроен для автоплатежей, платеж будет создан без этого параметра
     payment_id, pay_url = await maybe_await(
         create_payment,
         amount_rub="1.00",  # Тестовая сумма 1 рубль
@@ -223,6 +225,7 @@ async def pay(message: Message):
         return_url=return_url_with_user,
         customer_email=CUSTOMER_EMAIL,
         telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
+        enable_save_payment_method=True,  # Пытаемся включить сохранение способа оплаты
     )
 
     await save_payment(message.from_user.id, payment_id, status="pending")

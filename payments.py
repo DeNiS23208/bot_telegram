@@ -21,6 +21,7 @@ def create_payment(
     return_url: str,
     customer_email: str,
     telegram_user_id: int,
+    enable_save_payment_method: bool = False,
 ):
     """
     Создаёт платёж и возвращает (payment_id, confirmation_url)
@@ -29,6 +30,8 @@ def create_payment(
     - customer_email нужен для чека (54-ФЗ)
     - telegram_user_id кладём в metadata, чтобы webhook знал кому отправить инвайт
     - payment_subject/payment_mode обязательны, иначе BadRequestError
+    - enable_save_payment_method: если True, пытается включить сохранение способа оплаты
+      (работает только если магазин настроен для автоплатежей в ЮKassa)
     """
     idempotence_key = str(uuid.uuid4())
 
@@ -55,9 +58,24 @@ def create_payment(
             ],
         },
     }
+    
+    # Пытаемся включить сохранение способа оплаты, если запрошено
+    # ВАЖНО: это работает только если магазин настроен для автоплатежей в ЮKassa
+    # Если магазин не настроен, этот параметр вызовет ошибку ForbiddenError
+    if enable_save_payment_method:
+        payload["save_payment_method"] = True
 
-    payment = Payment.create(payload, idempotence_key)
-    return payment.id, payment.confirmation.confirmation_url
+    try:
+        payment = Payment.create(payload, idempotence_key)
+        return payment.id, payment.confirmation.confirmation_url
+    except Exception as e:
+        # Если ошибка связана с save_payment_method, пробуем без него
+        if enable_save_payment_method and ("recurring" in str(e).lower() or "forbidden" in str(e).lower()):
+            print(f"⚠️ Магазин не настроен для автоплатежей, создаю платеж без save_payment_method: {e}")
+            payload.pop("save_payment_method", None)
+            payment = Payment.create(payload, idempotence_key)
+            return payment.id, payment.confirmation.confirmation_url
+        raise
 
 
 def get_payment_status(payment_id: str) -> str:
