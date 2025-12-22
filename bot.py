@@ -289,7 +289,7 @@ async def support(message: Message):
     await message.answer(
         "🆘 Поддержка\n\n"
         "По всем вопросам обращайтесь к менеджеру:\n"
-        "@irina_blv"
+        "@otd_zabota"
     )
 
 
