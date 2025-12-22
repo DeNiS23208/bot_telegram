@@ -260,6 +260,31 @@ async def save_payment_method(telegram_id: int, payment_method_id: str) -> None:
         await db.commit()
 
 
+async def delete_payment_method(telegram_id: int) -> bool:
+    """
+    Удаляет сохраненный способ оплаты и отключает автопродление
+    Возвращает True если способ оплаты был удален, False если его не было
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Проверяем, есть ли сохраненный способ оплаты
+        cur = await db.execute(
+            "SELECT saved_payment_method_id FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+        
+        if not row or not row[0]:
+            return False  # Нет сохраненного способа оплаты
+        
+        # Удаляем способ оплаты и отключаем автопродление
+        await db.execute(
+            "UPDATE subscriptions SET saved_payment_method_id = NULL, auto_renewal_enabled = 0 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        await db.commit()
+        return True
+
+
 async def save_payment(telegram_id: int, payment_id: str, status: str = "pending") -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(

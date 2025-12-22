@@ -83,6 +83,7 @@ BTN_STATUS_1 = "📌 Статус подписки"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "✅ Проверить оплату"
 BTN_SUPPORT = "🆘 Поддержка"
+BTN_UNLINK_CARD = "🔓 Отвязать карту"
 
 
 def get_auto_renewal_button_text(enabled: bool) -> str:
@@ -94,23 +95,36 @@ def get_auto_renewal_button_text(enabled: bool) -> str:
 
 
 async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
-    """Создает главное меню с учетом статуса автопродления"""
+    """Создает главное меню с учетом статуса автопродления и сохраненной карты"""
     # Определяем текст кнопки автопродления
     if telegram_id:
         auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
         auto_renewal_text = get_auto_renewal_button_text(auto_renewal_enabled)
+        # Проверяем, есть ли сохраненная карта
+        saved_method = await get_saved_payment_method_id(telegram_id)
+        show_unlink = saved_method is not None
     else:
         auto_renewal_text = get_auto_renewal_button_text(False)
+        show_unlink = False
+    
+    keyboard = [
+        [KeyboardButton(text=BTN_PAY_1)],
+        [KeyboardButton(text=BTN_STATUS_1)],
+        [KeyboardButton(text=auto_renewal_text)],
+    ]
+    
+    # Добавляем кнопку отвязки карты, если есть сохраненная карта
+    if show_unlink:
+        keyboard.append([KeyboardButton(text=BTN_UNLINK_CARD)])
+    
+    keyboard.extend([
+        [KeyboardButton(text=BTN_ABOUT_1)],
+        [KeyboardButton(text=BTN_CHECK_1)],
+        [KeyboardButton(text=BTN_SUPPORT)],
+    ])
     
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_PAY_1)],
-            [KeyboardButton(text=BTN_STATUS_1)],
-            [KeyboardButton(text=auto_renewal_text)],
-            [KeyboardButton(text=BTN_ABOUT_1)],
-            [KeyboardButton(text=BTN_CHECK_1)],
-            [KeyboardButton(text=BTN_SUPPORT)],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
     )
 
