@@ -532,6 +532,18 @@ async def check_expired_subscriptions():
                     
                     # Если подписка уже истекла
                     if expires_at <= now:
+                        # Баним пользователя в канале (удаляем из канала)
+                        try:
+                            await bot.ban_chat_member(
+                                chat_id=CHANNEL_ID,
+                                user_id=telegram_id,
+                                until_date=None  # Бан навсегда (пока не оплатит снова)
+                            )
+                            print(f"✅ Пользователь {telegram_id} забанен в канале из-за истечения подписки")
+                        except Exception as ban_error:
+                            print(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                            # Продолжаем выполнение, даже если бан не удался
+                        
                         # Создаем новую ссылку на оплату для продления
                         from payments import create_payment
                         
@@ -885,39 +897,29 @@ async def yookassa_webhook(request: Request):
     except Exception:
         pass  # Игнорируем ошибки разбана
 
-    # Пытаемся создать ссылку БЕЗ заявки (прямой доступ)
+    # Создаем ПРИГЛАСИТЕЛЬНУЮ ссылку БЕЗ заявки (прямой доступ) - пользователь заплатил!
     invite_link = None
     try:
         invite = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
-            creates_join_request=False,  # БЕЗ заявки - прямой доступ
+            creates_join_request=False,  # БЕЗ заявки - прямой доступ (пользователь заплатил!)
             member_limit=1,  # Одноразовая ссылка
             expire_date=datetime.utcnow() + timedelta(hours=24)
         )
         invite_link = invite.invite_link
-        print(f"✅ Создана ссылка БЕЗ заявки для пользователя {tg_user_id}")
+        print(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (без заявки) для пользователя {tg_user_id}")
     except Exception as e:
-        # Если не получилось (канал требует одобрения), создаем ссылку с заявкой
-        # Заявка будет автоматически одобрена через обработчик в bot.py
-        print(f"⚠️ Не удалось создать ссылку без заявки: {e}. Создаю ссылку с заявкой.")
-        try:
-            invite = await bot.create_chat_invite_link(
-                chat_id=CHANNEL_ID,
-                creates_join_request=True,  # С заявкой, но она будет автоматически одобрена
-                member_limit=1,
-                expire_date=datetime.utcnow() + timedelta(hours=24)
-            )
-            invite_link = invite.invite_link
-        except Exception as e2:
-            print(f"❌ Ошибка создания ссылки: {e2}")
-            # Отправляем сообщение об ошибке
-            await bot.send_message(
-                tg_user_id,
-                "✅ Оплата подтверждена!\n\n"
-                "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором."
-            )
-            mark_processed(payment_id)
-            return {"ok": True, "error": "failed to create invite link"}
+        print(f"❌ Ошибка создания пригласительной ссылки: {e}")
+        import traceback
+        traceback.print_exc()
+        # Отправляем сообщение об ошибке
+        await bot.send_message(
+            tg_user_id,
+            "✅ Оплата подтверждена!\n\n"
+            "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором."
+        )
+        mark_processed(payment_id)
+        return {"ok": True, "error": "failed to create invite link"}
 
     # Получаем даты начала и окончания подписки (уже сохранены выше)
     from db import get_subscription_expires_at, get_subscription_starts_at
