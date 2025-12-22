@@ -22,6 +22,7 @@ from db import (
     get_saved_payment_method_id,
     is_auto_renewal_enabled,
     set_auto_renewal,
+    delete_payment_method,
 )
 from payments import create_payment, get_payment_status, get_payment_url
 
@@ -381,6 +382,41 @@ async def auto_renewal_toggle(message: Message):
                     "Пожалуйста, попробуйте позже или обратитесь в поддержку.",
                     reply_markup=await main_menu(user_id)
                 )
+
+
+@dp.message(lambda m: (m.text or "").strip() == BTN_UNLINK_CARD)
+async def unlink_card(message: Message):
+    """Обработчик кнопки отвязки карты"""
+    user_id = message.from_user.id
+    
+    # Проверяем, есть ли сохраненная карта
+    saved_method = await get_saved_payment_method_id(user_id)
+    
+    if not saved_method:
+        await message.answer(
+            "ℹ️ У вас нет привязанной карты.\n\n"
+            "Карта будет сохранена при оплате, если вы отметите галочку «Запомнить данные карты» на форме оплаты.",
+            reply_markup=await main_menu(user_id)
+        )
+        return
+    
+    # Удаляем способ оплаты и отключаем автопродление
+    deleted = await delete_payment_method(user_id)
+    
+    if deleted:
+        await message.answer(
+            "✅ Карта успешно отвязана\n\n"
+            "Автопродление подписки отключено.\n"
+            "Данные карты удалены из системы.\n\n"
+            "Для оплаты в следующий раз вам нужно будет ввести данные карты заново.",
+            reply_markup=await main_menu(user_id)
+        )
+    else:
+        await message.answer(
+            "❌ Ошибка при отвязке карты\n\n"
+            "Пожалуйста, попробуйте позже или обратитесь в поддержку.",
+            reply_markup=await main_menu(user_id)
+        )
 
 
 @dp.chat_join_request()
