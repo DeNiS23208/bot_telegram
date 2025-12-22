@@ -157,13 +157,13 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> tuple[
             (telegram_id, None, datetime.utcnow().isoformat())
         )
 
-        # upsert подписки (сохраняем дату начала и окончания, сохраняем auto_renewal_enabled если уже было включено)
+        # upsert подписки (сохраняем дату начала и окончания)
+        # Если автопродление включено, не обновляем его статус
         await db.execute(
             """
-            INSERT INTO subscriptions (telegram_id, expires_at, starts_at, auto_renewal_enabled)
-            VALUES (?, ?, ?, 0) ON CONFLICT(telegram_id) DO
+            INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
+            VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
             UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at
-            WHERE auto_renewal_enabled = 0
             """,
             (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
