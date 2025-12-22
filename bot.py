@@ -328,8 +328,9 @@ async def auto_renewal_toggle(message: Message):
                 expires_at = await get_subscription_expires_at(user_id)
                 
                 if expires_at:
-                    # Следующее списание будет в день окончания подписки
-                    next_payment_str = format_datetime_moscow(expires_at)
+                    # Следующее списание будет в день окончания подписки (в момент окончания)
+                    next_payment_date = expires_at
+                    next_payment_str = format_datetime_moscow(next_payment_date)
                     
                     await message.answer(
                         "✅ Автопродление подписки включено\n\n"

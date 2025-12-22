@@ -843,20 +843,34 @@ async def yookassa_webhook(request: Request):
     
     # Сохраняем payment_method_id если он есть (для автопродления)
     payment_method_id = None
+    payment_method_saved = False
+    
+    # Проверяем наличие payment_method и его статус сохранения
     if hasattr(payment, 'payment_method') and payment.payment_method:
-        if hasattr(payment.payment_method, 'id'):
-            payment_method_id = payment.payment_method.id
-        elif isinstance(payment.payment_method, dict) and 'id' in payment.payment_method:
-            payment_method_id = payment.payment_method['id']
+        pm = payment.payment_method
+        
+        # Проверяем, сохранен ли метод оплаты
+        if hasattr(pm, 'saved'):
+            payment_method_saved = bool(pm.saved)
+        elif isinstance(pm, dict):
+            payment_method_saved = bool(pm.get('saved', False))
+        
+        # Получаем ID метода оплаты
+        if hasattr(pm, 'id') and payment_method_saved:
+            payment_method_id = pm.id
+        elif isinstance(pm, dict) and payment_method_saved and 'id' in pm:
+            payment_method_id = pm['id']
     
     # Активируем подписку на 30 дней (starts_at, expires_at уже сохранены в activate_subscription)
     await activate_subscription(tg_user_id, days=30)
     
-    # Сохраняем payment_method_id если он есть
-    if payment_method_id:
+    # Сохраняем payment_method_id только если метод был сохранен пользователем
+    if payment_method_id and payment_method_saved:
         from db import save_payment_method
         await save_payment_method(tg_user_id, payment_method_id)
-        print(f"✅ Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
+        print(f"✅ Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (saved={payment_method_saved})")
+    else:
+        print(f"ℹ️ Платеж {payment_id}: payment_method не сохранен пользователем (saved={payment_method_saved})")
     
     # Обновляем статус платежа в БД
     await update_payment_status_async(payment_id, "succeeded")
