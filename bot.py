@@ -85,6 +85,7 @@ BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "✅ Проверить оплату"
 BTN_SUPPORT = "🆘 Поддержка"
 BTN_UNLINK_CARD = "🔓 Отвязать карту"
+BTN_DISABLE_AUTO = "Отключить автопродление"  # Временная кнопка для скриншотов
 
 
 def get_auto_renewal_button_text(enabled: bool) -> str:
@@ -113,6 +114,12 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_STATUS_1)],
         [KeyboardButton(text=auto_renewal_text)],
     ]
+    
+    # Временная кнопка для скриншотов ЮKassa
+    if telegram_id:
+        auto_renewal_status = await is_auto_renewal_enabled(telegram_id)
+        if auto_renewal_status:
+            keyboard.append([KeyboardButton(text=BTN_DISABLE_AUTO)])
     
     # Добавляем кнопку отвязки карты, если есть сохраненная карта
     if show_unlink:
