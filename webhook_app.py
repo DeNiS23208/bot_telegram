@@ -221,6 +221,8 @@ def db():
             telegram_id INTEGER PRIMARY KEY,
             expires_at TEXT,
             starts_at TEXT,
+            auto_renewal_enabled INTEGER DEFAULT 0,
+            saved_payment_method_id TEXT,
             FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
         )
     """)
@@ -839,8 +841,22 @@ async def yookassa_webhook(request: Request):
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
     
+    # Сохраняем payment_method_id если он есть (для автопродления)
+    payment_method_id = None
+    if hasattr(payment, 'payment_method') and payment.payment_method:
+        if hasattr(payment.payment_method, 'id'):
+            payment_method_id = payment.payment_method.id
+        elif isinstance(payment.payment_method, dict) and 'id' in payment.payment_method:
+            payment_method_id = payment.payment_method['id']
+    
     # Активируем подписку на 30 дней (starts_at, expires_at уже сохранены в activate_subscription)
     await activate_subscription(tg_user_id, days=30)
+    
+    # Сохраняем payment_method_id если он есть
+    if payment_method_id:
+        from db import save_payment_method
+        await save_payment_method(tg_user_id, payment_method_id)
+        print(f"✅ Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
     
     # Обновляем статус платежа в БД
     await update_payment_status_async(payment_id, "succeeded")
@@ -889,14 +905,25 @@ async def yookassa_webhook(request: Request):
             mark_processed(payment_id)
             return {"ok": True, "error": "failed to create invite link"}
 
+    # Получаем даты начала и окончания подписки (уже сохранены выше)
+    from db import get_subscription_expires_at, get_subscription_starts_at
+    expires_at_dt = await get_subscription_expires_at(tg_user_id)
+    starts_at_dt = await get_subscription_starts_at(tg_user_id)
+    
     # Сохраняем информацию о ссылке в БД
     if invite_link:
         save_invite_link(invite_link, tg_user_id, payment_id)
         
-        # Получаем даты начала и окончания подписки для отображения
-        starts_at, expires_at = await activate_subscription(tg_user_id, days=30)
-        starts_str = format_datetime_moscow(starts_at)
-        expires_str = format_datetime_moscow(expires_at)
+        # Форматируем даты для отображения
+        if starts_at_dt and expires_at_dt:
+            starts_str = format_datetime_moscow(starts_at_dt)
+            expires_str = format_datetime_moscow(expires_at_dt)
+        else:
+            # Если даты не найдены, используем текущее время (запасной вариант)
+            starts_at_dt = datetime.utcnow()
+            expires_at_dt = starts_at_dt + timedelta(days=30)
+            starts_str = format_datetime_moscow(starts_at_dt)
+            expires_str = format_datetime_moscow(expires_at_dt)
 
         await bot.send_message(
             tg_user_id,

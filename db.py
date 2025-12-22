@@ -62,6 +62,12 @@ async def init_db() -> None:
                              TEXT,
                              starts_at
                              TEXT,
+                             auto_renewal_enabled
+                             INTEGER
+                             DEFAULT
+                             0,
+                             saved_payment_method_id
+                             TEXT,
                              FOREIGN
                              KEY
                          (
@@ -151,12 +157,13 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> tuple[
             (telegram_id, None, datetime.utcnow().isoformat())
         )
 
-        # upsert подписки (сохраняем дату начала и окончания)
+        # upsert подписки (сохраняем дату начала и окончания, сохраняем auto_renewal_enabled если уже было включено)
         await db.execute(
             """
-            INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
-            VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
+            INSERT INTO subscriptions (telegram_id, expires_at, starts_at, auto_renewal_enabled)
+            VALUES (?, ?, ?, 0) ON CONFLICT(telegram_id) DO
             UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at
+            WHERE auto_renewal_enabled = 0
             """,
             (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
@@ -181,6 +188,76 @@ async def get_subscription_starts_at(telegram_id: int) -> Optional[datetime]:
         return datetime.fromisoformat(row[0])
     except ValueError:
         return None
+
+
+async def get_saved_payment_method_id(telegram_id: int) -> Optional[str]:
+    """Получает сохраненный payment_method_id пользователя"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT saved_payment_method_id FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+async def is_auto_renewal_enabled(telegram_id: int) -> bool:
+    """Проверяет, включено ли автопродление"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT auto_renewal_enabled FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    return bool(row and row[0]) if row else False
+
+
+async def set_auto_renewal(telegram_id: int, enabled: bool, payment_method_id: Optional[str] = None) -> bool:
+    """
+    Включает/выключает автопродление
+    Возвращает True если успешно, False если нет сохраненного метода оплаты
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Проверяем, есть ли сохраненный метод оплаты
+        if enabled:
+            if payment_method_id:
+                # Обновляем payment_method_id и включаем автопродление
+                await db.execute(
+                    "UPDATE subscriptions SET auto_renewal_enabled = ?, saved_payment_method_id = ? WHERE telegram_id = ?",
+                    (1, payment_method_id, telegram_id)
+                )
+            else:
+                # Проверяем, есть ли уже сохраненный метод
+                cur = await db.execute(
+                    "SELECT saved_payment_method_id FROM subscriptions WHERE telegram_id = ?",
+                    (telegram_id,)
+                )
+                row = await cur.fetchone()
+                if not row or not row[0]:
+                    return False  # Нет сохраненного метода оплаты
+                # Включаем автопродление без изменения payment_method_id
+                await db.execute(
+                    "UPDATE subscriptions SET auto_renewal_enabled = ? WHERE telegram_id = ?",
+                    (1, telegram_id)
+                )
+        else:
+            # Выключаем автопродление
+            await db.execute(
+                "UPDATE subscriptions SET auto_renewal_enabled = ? WHERE telegram_id = ?",
+                (0, telegram_id)
+            )
+        await db.commit()
+    return True
+
+
+async def save_payment_method(telegram_id: int, payment_method_id: str) -> None:
+    """Сохраняет payment_method_id для пользователя"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE subscriptions SET saved_payment_method_id = ? WHERE telegram_id = ?",
+            (payment_method_id, telegram_id)
+        )
+        await db.commit()
 
 
 async def save_payment(telegram_id: int, payment_id: str, status: str = "pending") -> None:

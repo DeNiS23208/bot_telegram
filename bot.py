@@ -19,6 +19,9 @@ from db import (
     get_latest_payment_id,
     get_active_pending_payment,
     format_datetime_moscow,
+    get_saved_payment_method_id,
+    is_auto_renewal_enabled,
+    set_auto_renewal,
 )
 from payments import create_payment, get_payment_status, get_payment_url
 
@@ -82,11 +85,28 @@ BTN_CHECK_1 = "✅ Проверить оплату"
 BTN_SUPPORT = "🆘 Поддержка"
 
 
-def main_menu() -> ReplyKeyboardMarkup:
+def get_auto_renewal_button_text(enabled: bool) -> str:
+    """Возвращает текст кнопки автопродления с индикатором"""
+    if enabled:
+        return "🔄 Автопродление подписки ✅"
+    else:
+        return "🔄 Автопродление подписки ❌"
+
+
+async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
+    """Создает главное меню с учетом статуса автопродления"""
+    # Определяем текст кнопки автопродления
+    if telegram_id:
+        auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
+        auto_renewal_text = get_auto_renewal_button_text(auto_renewal_enabled)
+    else:
+        auto_renewal_text = get_auto_renewal_button_text(False)
+    
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_PAY_1)],
             [KeyboardButton(text=BTN_STATUS_1)],
+            [KeyboardButton(text=auto_renewal_text)],
             [KeyboardButton(text=BTN_ABOUT_1)],
             [KeyboardButton(text=BTN_CHECK_1)],
             [KeyboardButton(text=BTN_SUPPORT)],
@@ -112,13 +132,13 @@ async def cmd_start(message: Message):
             "Вы вернулись после оплаты.\n\n"
             "Если оплата прошла успешно, вы получите ссылку на канал в ближайшее время.\n"
             "Если оплата не прошла, нажмите кнопку ✅ Проверить оплату для проверки статуса.",
-            reply_markup=main_menu(),
+            reply_markup=await main_menu(message.from_user.id),
         )
         return
     
     await message.answer(
         "Здравствуйте вас приветствует бот Наиля Хасанова",
-        reply_markup=main_menu(),
+        reply_markup=await main_menu(message.from_user.id),
     )
 
 
@@ -268,6 +288,67 @@ async def support(message: Message):
         "По всем вопросам обращайтесь к менеджеру:\n"
         "@irina_blv"
     )
+
+
+@dp.message(lambda m: (m.text or "").strip().startswith("🔄 Автопродление"))
+async def auto_renewal_toggle(message: Message):
+    """Обработчик кнопки автопродления подписки"""
+    user_id = message.from_user.id
+    
+    # Проверяем текущий статус автопродления
+    current_status = await is_auto_renewal_enabled(user_id)
+    
+    if current_status:
+        # Выключаем автопродление
+        await set_auto_renewal(user_id, False)
+        await message.answer(
+            "❌ Автопродление подписки выключено\n\n"
+            "Ваша подписка не будет автоматически продлеваться.",
+            reply_markup=await main_menu(user_id)
+        )
+    else:
+        # Проверяем, есть ли сохраненный метод оплаты
+        saved_method = await get_saved_payment_method_id(user_id)
+        
+        if not saved_method:
+            # Нет сохраненного метода оплаты
+            await message.answer(
+                "⚠️ Для включения автопродления необходимо сохранить данные карты при оплате\n\n"
+                "Чтобы включить автопродление:\n"
+                "1. Нажмите кнопку 💳 Оплатить доступ\n"
+                "2. При оплате обязательно сохраните данные карты (отметьте галочку «Сохранить карту для следующих платежей»)\n"
+                "3. После успешной оплаты нажмите кнопку автопродления еще раз",
+                reply_markup=await main_menu(user_id)
+            )
+        else:
+            # Включаем автопродление
+            success = await set_auto_renewal(user_id, True)
+            if success:
+                # Получаем дату окончания текущей подписки для расчета следующего списания
+                expires_at = await get_subscription_expires_at(user_id)
+                
+                if expires_at:
+                    # Следующее списание будет в день окончания подписки
+                    next_payment_str = format_datetime_moscow(expires_at)
+                    
+                    await message.answer(
+                        "✅ Автопродление подписки включено\n\n"
+                        f"Следующее автоматическое списание: {next_payment_str}\n\n"
+                        "Подписка будет автоматически продлеваться каждые 30 дней.",
+                        reply_markup=await main_menu(user_id)
+                    )
+                else:
+                    await message.answer(
+                        "✅ Автопродление подписки включено\n\n"
+                        "Подписка будет автоматически продлеваться каждые 30 дней при наличии активной подписки.",
+                        reply_markup=await main_menu(user_id)
+                    )
+            else:
+                await message.answer(
+                    "❌ Ошибка включения автопродления\n\n"
+                    "Пожалуйста, попробуйте позже или обратитесь в поддержку.",
+                    reply_markup=await main_menu(user_id)
+                )
 
 
 @dp.chat_join_request()

@@ -37,6 +37,9 @@ def create_payment(
         "confirmation": {"type": "redirect", "return_url": return_url},
         "capture": True,
         "description": description,
+        
+        # Сохраняем метод оплаты для возможности автопродления
+        "save_payment_method": True,
 
         # ✅ КРИТИЧНО: это нужно webhook'у
         "metadata": {"telegram_user_id": str(telegram_user_id)},
