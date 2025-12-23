@@ -873,9 +873,25 @@ async def yookassa_webhook(request: Request):
     if already_processed(payment_id):
         return {"ok": True, "duplicate": True}
 
+    # Получаем актуальный статус платежа из API
     payment = Payment.find_one(payment_id)
-    if payment.status != "succeeded":
-        return {"ok": True, "ignored": payment.status}
+    current_status = payment.status
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: проверяем статус ДО активации подписки
+    if current_status != "succeeded":
+        logger.warning(f"⚠️ Событие payment.succeeded получено, но статус платежа {payment_id} = {current_status}, игнорируем")
+        mark_processed(payment_id)
+        return {"ok": True, "ignored": f"status is {current_status}, not succeeded"}
+
+    # Дополнительная проверка: проверяем, что платеж действительно оплачен
+    # Проверяем сумму и статус оплаты
+    try:
+        if hasattr(payment, 'paid') and not payment.paid:
+            logger.warning(f"⚠️ Платеж {payment_id} не оплачен (paid=False), игнорируем")
+            mark_processed(payment_id)
+            return {"ok": True, "ignored": "payment not paid"}
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка проверки статуса оплаты: {e}")
 
     meta = payment.metadata or {}
     tg_user_id = meta.get("telegram_user_id")
@@ -885,6 +901,13 @@ async def yookassa_webhook(request: Request):
         return {"ok": True, "ignored": "no telegram_user_id"}
 
     tg_user_id = int(tg_user_id)
+    
+    # Еще раз проверяем статус перед активацией подписки (на случай если изменился)
+    payment_refresh = Payment.find_one(payment_id)
+    if payment_refresh.status != "succeeded":
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Статус платежа {payment_id} изменился с succeeded на {payment_refresh.status} перед активацией подписки!")
+        mark_processed(payment_id)
+        return {"ok": True, "ignored": f"status changed to {payment_refresh.status}"}
 
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
