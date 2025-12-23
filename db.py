@@ -3,35 +3,10 @@ import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional
 from dotenv import load_dotenv
-import pytz
 
 load_dotenv()
 
 DB_PATH = os.getenv("DB_PATH", "bot.db")
-MoscowTz = pytz.timezone('Europe/Moscow')
-
-def format_datetime_moscow(dt: datetime) -> str:
-    """
-    Форматирует datetime в строку МСК времени в формате: "число месяц год и время по МСК"
-    Пример: "21 декабря 2025 и 19:45 по МСК"
-    """
-    # Преобразуем UTC в МСК
-    if dt.tzinfo is None:
-        dt = pytz.utc.localize(dt)
-    moscow_dt = dt.astimezone(MoscowTz)
-    
-    # Месяцы на русском
-    months = [
-        'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-        'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
-    ]
-    
-    day = moscow_dt.day
-    month = months[moscow_dt.month - 1]
-    year = moscow_dt.year
-    time_str = moscow_dt.strftime('%H:%M')
-    
-    return f"{day} {month} {year} и {time_str} по МСК"
 
 
 async def init_db() -> None:
@@ -313,30 +288,6 @@ async def get_latest_payment_id(telegram_id: int) -> Optional[str]:
     return row[0] if row else None
 
 
-async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Optional[tuple]:
-    """
-    Получает активный pending платеж, созданный менее N минут назад
-    Возвращает (payment_id, created_at) или None
-    """
-    cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """
-            SELECT payment_id, created_at 
-            FROM payments 
-            WHERE telegram_id = ? 
-            AND status = 'pending' 
-            AND created_at > ?
-            ORDER BY id DESC 
-            LIMIT 1
-            """,
-            (telegram_id, cutoff_time.isoformat())
-        )
-        row = await cur.fetchone()
-    return row if row else None
-
-
 async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Optional[tuple[str, str]]:
     """
     Получает активный pending платеж пользователя, созданный менее N минут назад
@@ -355,3 +306,19 @@ async def get_active_pending_payment(telegram_id: int, minutes: int = 10) -> Opt
         )
         row = await cur.fetchone()
     return (row[0], row[1]) if row else None
+
+
+async def is_user_allowed(telegram_user_id: int) -> bool:
+    """
+    Проверяет, есть ли пользователь в списке оплативших (асинхронная версия)
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM approved_users WHERE telegram_user_id = ?",
+                (telegram_user_id,)
+            )
+            row = await cur.fetchone()
+            return row is not None
+    except Exception:
+        return False

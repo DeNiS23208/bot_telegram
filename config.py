@@ -1,0 +1,27 @@
+"""
+Конфигурация и константы бота
+"""
+from datetime import timedelta
+
+# Временные интервалы
+PAYMENT_LINK_VALID_MINUTES = 10  # Срок действия ссылки на оплату
+SUBSCRIPTION_DAYS = 30  # Длительность подписки в днях
+SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS = 3  # За сколько дней уведомлять об истечении
+SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS = 24  # Окно для уведомления (часы)
+
+# Интервалы проверки фоновых задач
+CHECK_EXPIRED_PAYMENTS_INTERVAL_SECONDS = 60  # Проверка истекших платежей (секунды)
+CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS = 3600  # Проверка истекших подписок (секунды)
+CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS = 3600  # Проверка истекающих подписок (секунды)
+
+# Ограничения для уведомлений
+MAX_NOTIFIED_USERS_CACHE_SIZE = 100  # Максимальный размер кэша уведомленных пользователей
+
+# Размеры файлов для видео
+MAX_VIDEO_SIZE_MB = 50  # Максимальный размер видео для отправки (MB)
+MAX_ANIMATION_SIZE_MB = 20  # Максимальный размер для отправки как animation (MB)
+MAX_ANIMATION_DURATION_SECONDS = 20  # Максимальная длительность для отправки как animation (секунды)
+
+# Сумма платежа
+PAYMENT_AMOUNT_RUB = "1.00"  # Сумма платежа в рублях
+

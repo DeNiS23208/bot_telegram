@@ -20,13 +20,22 @@ from db import (
     update_payment_status,
     get_latest_payment_id,
     get_active_pending_payment,
-    format_datetime_moscow,
     get_saved_payment_method_id,
     is_auto_renewal_enabled,
     set_auto_renewal,
     delete_payment_method,
+    is_user_allowed,
 )
+from utils import format_datetime_moscow
 from payments import create_payment, get_payment_status, get_payment_url
+from config import (
+    PAYMENT_LINK_VALID_MINUTES,
+    SUBSCRIPTION_DAYS,
+    PAYMENT_AMOUNT_RUB,
+    MAX_VIDEO_SIZE_MB,
+    MAX_ANIMATION_SIZE_MB,
+    MAX_ANIMATION_DURATION_SECONDS,
+)
 
 load_dotenv()
 
@@ -61,25 +70,6 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Импортируем функцию проверки оплативших пользователей из webhook_app
-# Для этого создадим простую функцию проверки в db.py или используем прямое подключение к БД
-import sqlite3
-DB_PATH = os.getenv("DB_PATH", "bot.db")
-
-def is_user_allowed(tg_user_id: int) -> bool:
-    """Проверяет, есть ли пользователь в списке оплативших"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM approved_users WHERE telegram_user_id = ?",
-            (tg_user_id,)
-        )
-        row = cur.fetchone()
-        conn.close()
-        return row is not None
-    except Exception:
-        return False
 
 BTN_PAY_1 = "💳 Оплатить подписку"  # Показывается если нет подписки
 BTN_MANAGE_SUB = "⚙️ Управление подпиской"  # Показывается если есть подписка
@@ -228,8 +218,8 @@ async def cmd_start(message: Message):
             # Создаем FSInputFile из локального файла
             video_file = FSInputFile(VIDEO_PATH)
             
-            # Проверяем размер - Telegram ограничение для send_video ~50MB
-            max_video_size = 50 * 1024 * 1024  # 50MB
+            # Проверяем размер - Telegram ограничение для send_video
+            max_video_size = MAX_VIDEO_SIZE_MB * 1024 * 1024
             if file_size > max_video_size:
                 # Если видео слишком большое, используем send_document
                 print(f"⚠️ Видео слишком большое ({file_size_mb:.1f}MB), отправляю как документ")
@@ -259,14 +249,11 @@ async def cmd_start(message: Message):
                     height = int(height_result.stdout.strip()) if height_result.returncode == 0 else None
                     
                     # Пробуем отправить как animation (GIF) для авто-воспроизведения в Desktop
-                    # Но только если видео короткое (до 20 секунд) и небольшое (до 20MB)
+                    # Но только если видео короткое и небольшое
                     # В Telegram animation может автоматически воспроизводиться в Desktop при прокрутке
-                    max_animation_duration = 20  # секунд
-                    max_animation_size_mb = 20  # MB
-                    
                     should_try_animation = (
-                        duration and duration <= max_animation_duration and 
-                        file_size_mb <= max_animation_size_mb
+                        duration and duration <= MAX_ANIMATION_DURATION_SECONDS and 
+                        file_size_mb <= MAX_ANIMATION_SIZE_MB
                     )
                     
                     if should_try_animation:
@@ -339,8 +326,8 @@ async def cmd_start(message: Message):
                             filename="welcome_video.mp4"
                         )
                         
-                        # Проверяем размер - Telegram ограничение для send_video ~50MB
-                        max_video_size = 50 * 1024 * 1024  # 50MB
+                        # Проверяем размер - Telegram ограничение для send_video
+                        max_video_size = MAX_VIDEO_SIZE_MB * 1024 * 1024
                         if len(video_data) > max_video_size:
                             # Если видео слишком большое, используем send_document
                             print(f"⚠️ Видео слишком большое ({video_size_mb:.1f}MB), отправляю как документ")
@@ -355,11 +342,10 @@ async def cmd_start(message: Message):
                         else:
                             # Пробуем отправить как animation для авто-воспроизведения в Desktop
                             # Animation может автоматически воспроизводиться в Desktop при прокрутке
-                            max_animation_size_mb = 20  # MB
                             try:
                                 # Пытаемся получить длительность из метаданных (если доступно)
                                 # Для простоты проверяем только размер
-                                if video_size_mb <= max_animation_size_mb:
+                                if video_size_mb <= MAX_ANIMATION_SIZE_MB:
                                     print(f"🎬 Пробую отправить как animation для авто-воспроизведения...")
                                     await bot.send_animation(
                                         chat_id=message.chat.id,
@@ -498,8 +484,8 @@ async def pay(message: Message):
         )
         return
 
-    # Проверяем, есть ли активный pending платеж (созданный менее 10 минут назад)
-    active_payment = await get_active_pending_payment(message.from_user.id, minutes=10)
+    # Проверяем, есть ли активный pending платеж (созданный менее N минут назад)
+    active_payment = await get_active_pending_payment(message.from_user.id, minutes=PAYMENT_LINK_VALID_MINUTES)
     
     if active_payment:
         payment_id, created_at = active_payment
@@ -510,9 +496,9 @@ async def pay(message: Message):
             pay_button = InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
             await message.answer(
-                "⏳ <b>У вас уже есть активная ссылка на оплату</b>\n\n"
+                f"⏳ <b>У вас уже есть активная ссылка на оплату</b>\n\n"
                 "Нажмите на кнопку ниже, чтобы перейти к оплате:\n\n"
-                "⚠️ <i>Ссылка действительна 10 минут с момента создания</i>\n\n"
+                f"⚠️ <i>Ссылка действительна {PAYMENT_LINK_VALID_MINUTES} минут с момента создания</i>\n\n"
                 "После оплаты нажмите: 🔍 Проверить оплату",
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -525,8 +511,8 @@ async def pay(message: Message):
     # Если магазин не настроен для автоплатежей, платеж будет создан без этого параметра
     payment_id, pay_url = await maybe_await(
         create_payment,
-        amount_rub="1.00",  # Тестовая сумма 1 рубль
-        description="Подписка на канал (30 дней)",
+        amount_rub=PAYMENT_AMOUNT_RUB,
+        description=f"Подписка на канал ({SUBSCRIPTION_DAYS} дней)",
         return_url=return_url_with_user,
         customer_email=CUSTOMER_EMAIL,
         telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
@@ -542,8 +528,8 @@ async def pay(message: Message):
     # Формируем сообщение с информацией о подписке
     subscription_text = (
         "💰 <b>Оформление подписки</b>\n\n"
-        "💎 <b>Стоимость:</b> 1 месяц — 1 рубль\n\n"
-        "🔄 <b>Автопродление:</b> каждые 30 дней\n\n"
+        f"💎 <b>Стоимость:</b> 1 месяц — {PAYMENT_AMOUNT_RUB} рубль\n\n"
+        f"🔄 <b>Автопродление:</b> каждые {SUBSCRIPTION_DAYS} дней\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "📋 Нажимая кнопку оплаты, вы соглашаетесь с:\n"
         "• Обработкой <a href=\"https://disk.yandex.ru/i/QadGJAMYKqbKpQ\">персональных данных</a>\n"
@@ -579,7 +565,7 @@ async def check_payment(message: Message):
     await update_payment_status(payment_id, status)
 
     if status == "succeeded":
-        starts_at, expires_at = await activate_subscription_days(message.from_user.id, days=30)
+        starts_at, expires_at = await activate_subscription_days(message.from_user.id, days=SUBSCRIPTION_DAYS)
         starts_str = format_datetime_moscow(starts_at)
         expires_str = format_datetime_moscow(expires_at)
         await message.answer(
@@ -898,8 +884,8 @@ async def approve_join_request(join_request: ChatJoinRequest):
     if CHANNEL_ID and join_request.chat.id == CHANNEL_ID:
         user_id = join_request.from_user.id
         
-        # Проверяем, оплатил ли пользователь
-        if is_user_allowed(user_id):
+        # Проверяем, оплатил ли пользователь (асинхронная версия)
+        if await is_user_allowed(user_id):
             try:
                 await join_request.approve()
                 print(f"✅ Автоматически одобрена заявка от пользователя {user_id}")

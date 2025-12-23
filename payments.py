@@ -93,3 +93,52 @@ def get_payment_url(payment_id: str) -> Optional[str]:
     except Exception:
         return None
 
+
+def create_auto_payment(
+    amount_rub: str,
+    description: str,
+    customer_email: str,
+    telegram_user_id: int,
+    payment_method_id: str,
+) -> tuple[str, str]:
+    """
+    Создает автоматический платеж с использованием сохраненного способа оплаты
+    Возвращает (payment_id, status)
+    
+    ВАЖНО: Эта функция используется для автопродления подписки
+    """
+    import uuid
+    idempotence_key = str(uuid.uuid4())
+    
+    payload = {
+        "amount": {"value": amount_rub, "currency": "RUB"},
+        "capture": True,
+        "description": description,
+        "payment_method_id": payment_method_id,  # Используем сохраненный способ оплаты
+        
+        # ✅ КРИТИЧНО: это нужно webhook'у
+        "metadata": {"telegram_user_id": str(telegram_user_id), "auto_renewal": "true"},
+        
+        "receipt": {
+            "customer": {"email": customer_email},
+            "items": [
+                {
+                    "description": "Автопродление подписки на закрытый Telegram-канал (30 дней)",
+                    "quantity": "1.00",
+                    "amount": {"value": amount_rub, "currency": "RUB"},
+                    "vat_code": 1,
+                    "payment_subject": "service",
+                    "payment_mode": "full_payment",
+                }
+            ],
+        },
+    }
+    
+    try:
+        payment = Payment.create(payload, idempotence_key)
+        return payment.id, payment.status
+    except Exception as e:
+        # Логируем ошибку для отладки
+        print(f"❌ Ошибка создания автоматического платежа: {e}")
+        raise
+

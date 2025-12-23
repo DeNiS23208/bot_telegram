@@ -3,7 +3,7 @@ import sqlite3
 import aiosqlite
 import asyncio
 from datetime import datetime, timedelta
-import pytz
+import logging
 
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
@@ -12,30 +12,26 @@ from aiogram.types import ChatJoinRequest, ReplyKeyboardMarkup, KeyboardButton
 from yookassa import Payment, Configuration
 from yookassa.domain.notification import WebhookNotificationFactory
 
-MoscowTz = pytz.timezone('Europe/Moscow')
+from utils import format_datetime_moscow
+from config import (
+    PAYMENT_LINK_VALID_MINUTES,
+    SUBSCRIPTION_DAYS,
+    SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS,
+    SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS,
+    CHECK_EXPIRED_PAYMENTS_INTERVAL_SECONDS,
+    CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS,
+    CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS,
+    MAX_NOTIFIED_USERS_CACHE_SIZE,
+    PAYMENT_AMOUNT_RUB,
+)
+from db import is_user_allowed
 
-def format_datetime_moscow(dt: datetime) -> str:
-    """
-    Форматирует datetime в строку МСК времени в формате: "число месяц год и время по МСК"
-    Пример: "21 декабря 2025 и 19:45 по МСК"
-    """
-    # Преобразуем UTC в МСК
-    if dt.tzinfo is None:
-        dt = pytz.utc.localize(dt)
-    moscow_dt = dt.astimezone(MoscowTz)
-    
-    # Месяцы на русском
-    months = [
-        'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-        'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
-    ]
-    
-    day = moscow_dt.day
-    month = months[moscow_dt.month - 1]
-    year = moscow_dt.year
-    time_str = moscow_dt.strftime('%H:%M')
-    
-    return f"{day} {month} {year} и {time_str} по МСК"
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -60,14 +56,14 @@ Configuration.secret_key = YOOKASSA_SECRET_KEY
 app = FastAPI()
 bot = Bot(token=BOT_TOKEN)
 
-# Запускаем фоновые задачи для проверки истекших платежей и подписок
+    # Запускаем фоновые задачи для проверки истекших платежей и подписок
 @app.on_event("startup")
 async def startup_event():
     """Запускаем фоновые задачи при старте приложения"""
     asyncio.create_task(check_expired_payments())
     asyncio.create_task(check_expired_subscriptions())
     asyncio.create_task(check_subscriptions_expiring_soon())
-    print("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
+    logger.info("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
 
 
 # Обработчик возврата с ЮKassa (если пользователь вернулся без оплаты)
@@ -82,7 +78,7 @@ async def payment_return(request: Request):
     # Также пытаемся получить payment_id напрямую (если ЮKassa передает)
     payment_id = request.query_params.get("payment_id") or request.query_params.get("orderId")
     
-    print(f"📥 Получен возврат с формы оплаты: user_id={tg_user_id_param}, payment_id={payment_id}, query_params={dict(request.query_params)}")
+    logger.info(f"📥 Получен возврат с формы оплаты: user_id={tg_user_id_param}, payment_id={payment_id}, query_params={dict(request.query_params)}")
     
     tg_user_id = None
     
@@ -92,17 +88,17 @@ async def payment_return(request: Request):
             payment = Payment.find_one(payment_id)
             meta = payment.metadata or {}
             tg_user_id = meta.get("telegram_user_id")
-            print(f"📋 Получен tg_user_id из метаданных платежа: {tg_user_id}")
+            logger.info(f"📋 Получен tg_user_id из метаданных платежа: {tg_user_id}")
         except Exception as e:
-            print(f"⚠️ Ошибка получения платежа {payment_id}: {e}")
+            logger.warning(f"⚠️ Ошибка получения платежа {payment_id}: {e}")
     
     # Если tg_user_id не получен из платежа, используем из параметров
     if not tg_user_id and tg_user_id_param:
         try:
             tg_user_id = int(tg_user_id_param)
-            print(f"📋 Использован tg_user_id из параметров: {tg_user_id}")
+            logger.info(f"📋 Использован tg_user_id из параметров: {tg_user_id}")
         except ValueError:
-            print(f"⚠️ Неверный формат user_id: {tg_user_id_param}")
+            logger.warning(f"⚠️ Неверный формат user_id: {tg_user_id_param}")
     
     if tg_user_id:
         tg_user_id = int(tg_user_id)
@@ -111,12 +107,12 @@ async def payment_return(request: Request):
         if not payment_id:
             try:
                 from db import get_active_pending_payment
-                active_payment = await get_active_pending_payment(tg_user_id, minutes=30)
+                active_payment = await get_active_pending_payment(tg_user_id, minutes=PAYMENT_LINK_VALID_MINUTES * 3)
                 if active_payment:
                     payment_id, created_at = active_payment
-                    print(f"📋 Найден последний pending платеж: {payment_id}")
+                    logger.info(f"📋 Найден последний pending платеж: {payment_id}")
             except Exception as e:
-                print(f"⚠️ Ошибка поиска последнего платежа: {e}")
+                logger.warning(f"⚠️ Ошибка поиска последнего платежа: {e}")
                 payment_id = None
         
         # Если есть payment_id, проверяем статус платежа
@@ -124,7 +120,7 @@ async def payment_return(request: Request):
             try:
                 payment = Payment.find_one(payment_id)
                 current_status = payment.status
-                print(f"📋 Статус платежа {payment_id}: {current_status}")
+                logger.info(f"📋 Статус платежа {payment_id}: {current_status}")
                 
                 # Если платеж все еще pending, значит пользователь не оплатил (вышел из формы)
                 if current_status == "pending":
@@ -144,23 +140,23 @@ async def payment_return(request: Request):
                                 "Вы вышли из формы оплаты без завершения платежа.\n\n"
                                 "Для оплаты доступа нажмите кнопку 💳 Оплатить доступ и перейдите по новой ссылке."
                             )
-                            print(f"✅ Отправлено уведомление о незавершенной оплате пользователю {tg_user_id}")
+                            logger.info(f"✅ Отправлено уведомление о незавершенной оплате пользователю {tg_user_id}")
                             # Помечаем, что уведомление отправлено (обновляем статус на "canceled" чтобы фоновая задача пропустила)
                             await update_payment_status_async(payment_id, "canceled")
                         except Exception as e:
-                            print(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
+                            logger.error(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
                     else:
-                        print(f"ℹ️ Пользователь {tg_user_id} вернулся с формы оплаты, но у него уже есть активная подписка")
+                        logger.info(f"ℹ️ Пользователь {tg_user_id} вернулся с формы оплаты, но у него уже есть активная подписка")
                 
                 # Если платеж отменен, webhook должен был обработать это
                 elif current_status == "canceled":
                     has_active = await has_active_subscription(tg_user_id)
                     if not has_active:
                         # Уже должен был быть обработан через webhook, но на всякий случай проверим
-                        print(f"ℹ️ Платеж {payment_id} уже отменен, webhook должен был обработать")
+                        logger.info(f"ℹ️ Платеж {payment_id} уже отменен, webhook должен был обработать")
                         
             except Exception as e:
-                print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
+                logger.error(f"❌ Ошибка проверки платежа {payment_id}: {e}")
                 import traceback
                 traceback.print_exc()
         else:
@@ -174,11 +170,11 @@ async def payment_return(request: Request):
                         "Вы вышли из формы оплаты без завершения платежа.\n\n"
                         "Для оплаты доступа нажмите кнопку 💳 Оплатить доступ и перейдите по новой ссылке."
                     )
-                    print(f"✅ Отправлено уведомление пользователю {tg_user_id} (платеж не найден)")
+                    logger.info(f"✅ Отправлено уведомление пользователю {tg_user_id} (платеж не найден)")
                 except Exception as e:
-                    print(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
+                    logger.error(f"❌ Ошибка отправки уведомления пользователю {tg_user_id}: {e}")
     else:
-        print(f"⚠️ Не удалось определить telegram_user_id для обработки возврата")
+        logger.warning(f"⚠️ Не удалось определить telegram_user_id для обработки возврата")
     
     # Возвращаем простую страницу или редирект
     return {"status": "ok", "message": "Вы вернулись с формы оплаты"}
@@ -268,16 +264,6 @@ def allow_user(tg_user_id: int):
     conn.close()
 
 
-def is_user_allowed(tg_user_id: int) -> bool:
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT 1 FROM approved_users WHERE telegram_user_id = ?",
-        (tg_user_id,)
-    )
-    row = cur.fetchone()
-    conn.close()
-    return row is not None
 
 
 def save_invite_link(invite_link: str, telegram_user_id: int, payment_id: str):
@@ -392,10 +378,10 @@ async def has_active_subscription(telegram_id: int) -> bool:
 
 
 async def get_expired_pending_payments():
-    """Получает список платежей со статусом pending, которые старше 10 минут"""
+    """Получает список платежей со статусом pending, которые старше N минут"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
-        # Платежи старше 10 минут со статусом pending (НЕ canceled и НЕ expired)
-        cutoff_time = (datetime.utcnow() - timedelta(minutes=10)).isoformat()
+        # Платежи старше N минут со статусом pending (НЕ canceled и НЕ expired)
+        cutoff_time = (datetime.utcnow() - timedelta(minutes=PAYMENT_LINK_VALID_MINUTES)).isoformat()
         cursor = await db_conn.execute(
             """
             SELECT telegram_id, payment_id, created_at 
@@ -411,32 +397,31 @@ async def get_expired_pending_payments():
 
 
 async def get_expired_subscriptions():
-    """Получает список подписок, которые истекли или истекают в ближайшие 3 дня"""
+    """Получает список подписок, которые истекли"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
         now = datetime.utcnow()
-        # Подписки, которые истекли или истекают в течение 3 дней
-        expires_soon = (now + timedelta(days=3)).isoformat()
+        # Подписки, которые уже истекли
         cursor = await db_conn.execute(
             """
-            SELECT telegram_id, expires_at 
+            SELECT telegram_id, expires_at, auto_renewal_enabled, saved_payment_method_id
             FROM subscriptions 
-            WHERE expires_at <= ? AND expires_at > ?
+            WHERE expires_at <= ?
             """,
-            (expires_soon, now.isoformat())
+            (now.isoformat(),)
         )
         rows = await cursor.fetchall()
         return rows
 
 
 async def get_subscriptions_expiring_soon():
-    """Получает список подписок, которые истекают через 3 дня (для уведомления)"""
+    """Получает список подписок, которые истекают через N дней (для уведомления)"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
         now = datetime.utcnow()
-        # Подписки, которые истекают ровно через 3 дня (с небольшой погрешностью)
-        target_date = now + timedelta(days=3)
-        # Проверяем подписки, которые истекают в течение следующих 24 часов после 3 дней
+        # Подписки, которые истекают через N дней (с небольшой погрешностью)
+        target_date = now + timedelta(days=SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS)
+        # Проверяем подписки, которые истекают в течение окна уведомления
         start_date = target_date.isoformat()
-        end_date = (target_date + timedelta(hours=24)).isoformat()
+        end_date = (target_date + timedelta(hours=SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS)).isoformat()
         cursor = await db_conn.execute(
             """
             SELECT telegram_id, expires_at 
@@ -453,7 +438,7 @@ async def check_expired_payments():
     """Проверяет истекшие платежи и уведомляет пользователей"""
     while True:
         try:
-            await asyncio.sleep(60)  # Проверяем каждую минуту
+            await asyncio.sleep(CHECK_EXPIRED_PAYMENTS_INTERVAL_SECONDS)
             
             expired_payments = await get_expired_pending_payments()
             
@@ -471,7 +456,7 @@ async def check_expired_payments():
                         if has_active:
                             # Если подписка активна - просто обновляем статус, не отправляем уведомление
                             await update_payment_status_async(payment_id, "expired")
-                            print(f"ℹ️ Платеж {payment_id} истек, но у пользователя {telegram_id} уже есть активная подписка - уведомление не отправлено")
+                            logger.info(f"ℹ️ Платеж {payment_id} истек, но у пользователя {telegram_id} уже есть активная подписка - уведомление не отправлено")
                         else:
                             # Обновляем статус на expired
                             await update_payment_status_async(payment_id, "expired")
@@ -480,35 +465,35 @@ async def check_expired_payments():
                             try:
                                 await bot.send_message(
                                     telegram_id,
-                                    "⏰ Срок действия ссылки на оплату истёк\n\n"
+                                    f"⏰ Срок действия ссылки на оплату истёк\n\n"
                                     "Вы открыли ссылку на оплату, но не завершили платёж.\n"
-                                    "Ссылка была действительна 10 минут.\n\n"
-                                    "Для оплаты доступа нажмите кнопку 💳 Оплатить доступ и перейдите по новой ссылке."
+                                    f"Ссылка была действительна {PAYMENT_LINK_VALID_MINUTES} минут.\n\n"
+                                    "Для оплаты доступа нажмите кнопку 💳 Оплатить подписку и перейдите по новой ссылке."
                                 )
-                                print(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id}")
+                                logger.info(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id}")
                             except Exception as e:
-                                print(f"❌ Ошибка отправки уведомления об истечении: {e}")
+                                logger.error(f"❌ Ошибка отправки уведомления об истечении: {e}")
                     else:
                         # Если статус изменился (например, на canceled), обновляем в БД
                         await update_payment_status_async(payment_id, current_status)
                         
                 except Exception as e:
-                    print(f"❌ Ошибка проверки платежа {payment_id}: {e}")
+                    logger.error(f"❌ Ошибка проверки платежа {payment_id}: {e}")
                     
         except Exception as e:
-            print(f"❌ Ошибка в фоновой задаче проверки платежей: {e}")
+            logger.error(f"❌ Ошибка в фоновой задаче проверки платежей: {e}")
             await asyncio.sleep(60)  # Ждем перед следующей попыткой
 
 
 async def check_subscriptions_expiring_soon():
-    """Проверяет подписки, которые истекают через 3 дня, и отправляет уведомления"""
+    """Проверяет подписки, которые истекают через N дней, и отправляет уведомления"""
     notified_users = set()  # Чтобы не отправлять несколько раз одному пользователю
     
     while True:
         try:
-            await asyncio.sleep(3600)  # Проверяем каждый час
+            await asyncio.sleep(CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS)
             
-            # Получаем подписки, которые истекают через 3 дня
+            # Получаем подписки, которые истекают через N дней
             expiring_subs = await get_subscriptions_expiring_soon()
             
             for telegram_id, expires_at_str in expiring_subs:
@@ -520,42 +505,49 @@ async def check_subscriptions_expiring_soon():
                     now = datetime.utcnow()
                     days_left = (expires_at - now).days
                     
-                    # Если осталось примерно 3 дня (2-4 дня для учета погрешности)
-                    if 2 <= days_left <= 4:
+                    # Если осталось примерно N дней (с погрешностью ±1 день)
+                    notification_days_min = SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS - 1
+                    notification_days_max = SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS + 1
+                    if notification_days_min <= days_left <= notification_days_max:
                         await bot.send_message(
                             telegram_id,
-                            "⏰ Внимание! Подписка истекает через 3 дня\n\n"
+                            f"⏰ Внимание! Подписка истекает через {SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS} дня\n\n"
                             f"Ваша подписка действует до: {expires_at.date()}\n\n"
-                            "Для продления подписки нажмите кнопку 💳 Оплатить доступ.\n"
+                            "Для продления подписки нажмите кнопку 💳 Оплатить подписку.\n"
                             "Если подписка не будет продлена, вас удалят из канала."
                         )
                         notified_users.add(telegram_id)
-                        print(f"✅ Отправлено уведомление о скором истечении подписки пользователю {telegram_id}")
+                        logger.info(f"✅ Отправлено уведомление о скором истечении подписки пользователю {telegram_id}")
                         
                 except Exception as e:
-                    print(f"❌ Ошибка обработки уведомления для пользователя {telegram_id}: {e}")
+                    logger.error(f"❌ Ошибка обработки уведомления для пользователя {telegram_id}: {e}")
             
-            # Очищаем обработанных пользователей раз в день
-            if len(notified_users) > 100:
+            # Очищаем обработанных пользователей при достижении лимита
+            if len(notified_users) > MAX_NOTIFIED_USERS_CACHE_SIZE:
                 notified_users.clear()
                     
         except Exception as e:
-            print(f"❌ Ошибка в фоновой задаче проверки истекающих подписок: {e}")
-            await asyncio.sleep(3600)
+            logger.error(f"❌ Ошибка в фоновой задаче проверки истекающих подписок: {e}")
+            await asyncio.sleep(CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS)
 
 
 async def check_expired_subscriptions():
-    """Проверяет истекшие подписки и отправляет ссылки на продление"""
+    """Проверяет истекшие подписки и выполняет автопродление или отправляет ссылку на оплату"""
     processed_users = set()  # Чтобы не отправлять несколько раз одному пользователю
     
     while True:
         try:
-            await asyncio.sleep(3600)  # Проверяем каждый час
+            await asyncio.sleep(CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS)
             
             # Проверяем подписки, которые истекли
             expired_subs = await get_expired_subscriptions()
             
-            for telegram_id, expires_at_str in expired_subs:
+            for row in expired_subs:
+                telegram_id = row[0]
+                expires_at_str = row[1]
+                auto_renewal_enabled = bool(row[2]) if len(row) > 2 else False
+                saved_payment_method_id = row[3] if len(row) > 3 and row[3] else None
+                
                 if telegram_id in processed_users:
                     continue
                     
@@ -565,63 +557,119 @@ async def check_expired_subscriptions():
                     
                     # Если подписка уже истекла
                     if expires_at <= now:
-                        # Баним пользователя в канале (удаляем из канала)
-                        try:
-                            await bot.ban_chat_member(
-                                chat_id=CHANNEL_ID,
-                                user_id=telegram_id,
-                                until_date=None  # Бан навсегда (пока не оплатит снова)
+                        # Проверяем, включено ли автопродление и есть ли сохраненный способ оплаты
+                        if auto_renewal_enabled and saved_payment_method_id:
+                            # Пытаемся выполнить автоматическое списание
+                            try:
+                                from payments import create_auto_payment
+                                from db import activate_subscription_days, save_payment, update_payment_status
+                                
+                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                                
+                                # Создаем автоматический платеж
+                                payment_id, payment_status = create_auto_payment(
+                                    amount_rub=PAYMENT_AMOUNT_RUB,
+                                    description=f"Автопродление подписки на канал ({SUBSCRIPTION_DAYS} дней)",
+                                    customer_email=CUSTOMER_EMAIL,
+                                    telegram_user_id=telegram_id,
+                                    payment_method_id=saved_payment_method_id,
+                                )
+                                
+                                # Сохраняем платеж
+                                await save_payment(telegram_id, payment_id, status=payment_status)
+                                
+                                # Если платеж успешен, активируем подписку
+                                if payment_status == "succeeded":
+                                    await activate_subscription_days(telegram_id, days=SUBSCRIPTION_DAYS)
+                                    
+                                    # Разбаниваем пользователя, если был забанен
+                                    try:
+                                        await bot.unban_chat_member(
+                                            chat_id=CHANNEL_ID,
+                                            user_id=telegram_id,
+                                            only_if_banned=True
+                                        )
+                                    except Exception:
+                                        pass
+                                    
+                                    # Отправляем уведомление об успешном автопродлении
+                                    await bot.send_message(
+                                        telegram_id,
+                                        "✅ Подписка автоматически продлена!\n\n"
+                                        f"С вашей карты списано {PAYMENT_AMOUNT_RUB} руб.\n"
+                                        f"Подписка продлена на {SUBSCRIPTION_DAYS} дней.\n\n"
+                                        "Спасибо за использование автопродления!"
+                                    )
+                                    logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}")
+                                else:
+                                    # Платеж не прошел, отправляем уведомление
+                                    await bot.send_message(
+                                        telegram_id,
+                                        "⚠️ Не удалось автоматически продлить подписку\n\n"
+                                        "Пожалуйста, оплатите подписку вручную, нажав кнопку 💳 Оплатить подписку."
+                                    )
+                                    logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, payment_id: {payment_id}, status: {payment_status}")
+                                    
+                            except Exception as auto_payment_error:
+                                logger.error(f"❌ Ошибка автоматического списания для пользователя {telegram_id}: {auto_payment_error}")
+                                # Продолжаем выполнение, отправляем ссылку на оплату
+                                auto_renewal_enabled = False  # Отключаем автопродление для этого цикла
+                        
+                        # Если автопродление не включено или не удалось, отправляем ссылку на оплату
+                        if not auto_renewal_enabled or not saved_payment_method_id:
+                            # Баним пользователя в канале (удаляем из канала)
+                            try:
+                                await bot.ban_chat_member(
+                                    chat_id=CHANNEL_ID,
+                                    user_id=telegram_id,
+                                    until_date=None  # Бан навсегда (пока не оплатит снова)
+                                )
+                                logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за истечения подписки")
+                            except Exception as ban_error:
+                                logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                            
+                            # Создаем новую ссылку на оплату для продления
+                            from payments import create_payment
+                            
+                            RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'xasanimbot')}"
+                            CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                            
+                            # create_payment - синхронная функция
+                            payment_id, pay_url = create_payment(
+                                amount_rub=PAYMENT_AMOUNT_RUB,
+                                description=f"Продление подписки на канал ({SUBSCRIPTION_DAYS} дней)",
+                                return_url=RETURN_URL_WEBHOOK,
+                                customer_email=CUSTOMER_EMAIL,
+                                telegram_user_id=telegram_id,
                             )
-                            print(f"✅ Пользователь {telegram_id} забанен в канале из-за истечения подписки")
-                        except Exception as ban_error:
-                            print(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
-                            # Продолжаем выполнение, даже если бан не удался
-                        
-                        # Создаем новую ссылку на оплату для продления
-                        from payments import create_payment
-                        
-                        RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'xasanimbot')}"
-                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                        
-                        # create_payment - синхронная функция
-                        payment_id, pay_url = create_payment(
-                            amount_rub="1.00",
-                            description="Продление подписки на канал (30 дней)",
-                            return_url=RETURN_URL_WEBHOOK,
-                            customer_email=CUSTOMER_EMAIL,
-                            telegram_user_id=telegram_id,
-                        )
-                        
-                        # Сохраняем платеж
-                        async with aiosqlite.connect(DB_PATH) as db_conn:
-                            await db_conn.execute(
-                                "INSERT OR IGNORE INTO payments (telegram_id, payment_id, status, created_at) VALUES (?, ?, ?, ?)",
-                                (telegram_id, payment_id, "pending", datetime.utcnow().isoformat())
+                            
+                            # Сохраняем платеж
+                            from db import save_payment
+                            await save_payment(telegram_id, payment_id, status="pending")
+                            
+                            # Отправляем уведомление
+                            await bot.send_message(
+                                telegram_id,
+                                "⏰ Ваша подписка истекла\n\n"
+                                "Для продления подписки перейдите по ссылке:\n"
+                                f"{pay_url}\n\n"
+                                "После оплаты вернитесь в бота и нажмите: 🔍 Проверить оплату"
                             )
-                            await db_conn.commit()
-                        
-                        # Отправляем уведомление
-                        await bot.send_message(
-                            telegram_id,
-                            "⏰ Ваша подписка истекла\n\n"
-                            "Для продления подписки перейдите по ссылке:\n"
-                            f"{pay_url}\n\n"
-                            "После оплаты вернитесь в бота и нажмите: ✅ Проверить оплату"
-                        )
+                            
+                            logger.info(f"✅ Отправлена ссылка на продление подписки пользователю {telegram_id}")
                         
                         processed_users.add(telegram_id)
-                        print(f"✅ Отправлена ссылка на продление подписки пользователю {telegram_id}")
                         
                 except Exception as e:
-                    print(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
+                    logger.error(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
             
-            # Очищаем обработанных пользователей раз в день
-            if len(processed_users) > 100:
+            # Очищаем обработанных пользователей при достижении лимита
+            if len(processed_users) > MAX_NOTIFIED_USERS_CACHE_SIZE:
                 processed_users.clear()
                     
         except Exception as e:
-            print(f"❌ Ошибка в фоновой задаче проверки подписок: {e}")
-            await asyncio.sleep(3600)
+            logger.error(f"❌ Ошибка в фоновой задаче проверки подписок: {e}")
+            await asyncio.sleep(CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS)
 
 
 # ================== YOOKASSA WEBHOOK ==================
@@ -635,7 +683,7 @@ async def yookassa_webhook(request: Request):
     try:
         notification = WebhookNotificationFactory().create(data)
     except Exception as e:
-        print(f"❌ Ошибка создания notification: {e}")
+        logger.error(f"❌ Ошибка создания notification: {e}")
         raise HTTPException(status_code=400, detail="Bad YooKassa notification")
 
     payment_obj = notification.object
@@ -643,18 +691,18 @@ async def yookassa_webhook(request: Request):
     event = notification.event
     
     # Логируем все события для отладки
-    print(f"📥 Получено событие от ЮKassa: {event}, payment_id: {payment_id}")
+    logger.info(f"📥 Получено событие от ЮKassa: {event}, payment_id: {payment_id}")
 
     # Обрабатываем отмененные/неудачные платежи
     if event == "payment.canceled":
-        print(f"🔄 Обработка canceled платежа: {payment_id}")
+        logger.info(f"🔄 Обработка canceled платежа: {payment_id}")
         try:
             payment = Payment.find_one(payment_id)
             meta = payment.metadata or {}
             tg_user_id = meta.get("telegram_user_id")
             
-            print(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
-            print(f"📋 Платеж из notification: {payment_obj}")
+            logger.info(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
+            logger.debug(f"📋 Платеж из notification: {payment_obj}")
             
             if tg_user_id:
                 tg_user_id = int(tg_user_id)
@@ -696,7 +744,7 @@ async def yookassa_webhook(request: Request):
                             reason = str(getattr(cancellation_details_final, 'reason', '')).lower()
                             party = str(getattr(cancellation_details_final, 'party', '')).lower()
                         
-                        print(f"🔍 Причина отмены: reason={reason}, party={party}, details={cancellation_details_final}")
+                        logger.debug(f"🔍 Причина отмены: reason={reason}, party={party}, details={cancellation_details_final}")
                         
                         # Проверяем на недостаток средств (разные варианты)
                         if any(keyword in reason for keyword in ['insufficient', 'funds', 'недостаточно', 'money', 'balance']):
@@ -756,9 +804,9 @@ async def yookassa_webhook(request: Request):
                         )
                         
                 except Exception as e:
-                    print(f"⚠️ Ошибка при определении причины отмены: {e}")
+                    logger.warning(f"⚠️ Ошибка при определении причины отмены: {e}")
                     import traceback
-                    traceback.print_exc()
+                    logger.debug(traceback.format_exc())
                     # В случае ошибки все равно отправляем сообщение об отмене
                     cancellation_reason = "отменен пользователем (выход из формы)"
                     message_text = (
@@ -772,18 +820,18 @@ async def yookassa_webhook(request: Request):
                 
                 if has_active:
                     # Если подписка активна - не отправляем уведомление об отмене старого платежа
-                    print(f"ℹ️ Платеж {payment_id} отменен, но у пользователя {tg_user_id} уже есть активная подписка - уведомление не отправлено")
+                    logger.info(f"ℹ️ Платеж {payment_id} отменен, но у пользователя {tg_user_id} уже есть активная подписка - уведомление не отправлено")
                 else:
                     # Уведомляем пользователя только если нет активной подписки
                     try:
                         await bot.send_message(tg_user_id, message_text)
-                        print(f"✅ Отправлено уведомление об отмене платежа пользователю {tg_user_id}, причина: {cancellation_reason}")
+                        logger.info(f"✅ Отправлено уведомление об отмене платежа пользователю {tg_user_id}, причина: {cancellation_reason}")
                     except Exception as e:
-                        print(f"❌ Ошибка отправки уведомления об отмене платежа пользователю {tg_user_id}: {e}")
+                        logger.error(f"❌ Ошибка отправки уведомления об отмене платежа пользователю {tg_user_id}: {e}")
             else:
-                print(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id}")
+                logger.warning(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id}")
         except Exception as e:
-            print(f"❌ Ошибка обработки canceled платежа {payment_id}: {e}")
+            logger.error(f"❌ Ошибка обработки canceled платежа {payment_id}: {e}")
             import traceback
             traceback.print_exc()
         
@@ -791,13 +839,13 @@ async def yookassa_webhook(request: Request):
 
     # Обрабатываем возвраты (refunds)
     if event == "refund.succeeded":
-        print(f"🔄 Обработка refund.succeeded: {payment_id}")
+        logger.info(f"🔄 Обработка refund.succeeded: {payment_id}")
         try:
             # Получаем информацию о возврате
             refund_obj = notification.object
             payment_id_refund = refund_obj.payment_id if hasattr(refund_obj, 'payment_id') else None
             
-            print(f"📋 Информация о возврате: payment_id={payment_id_refund}")
+            logger.info(f"📋 Информация о возврате: payment_id={payment_id_refund}")
             
             if payment_id_refund:
                 # Получаем оригинальный платеж
@@ -805,7 +853,7 @@ async def yookassa_webhook(request: Request):
                 meta = payment.metadata or {}
                 tg_user_id = meta.get("telegram_user_id")
                 
-                print(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
+                logger.info(f"📋 Метаданные платежа: {meta}, tg_user_id: {tg_user_id}")
                 
                 if tg_user_id:
                     tg_user_id = int(tg_user_id)
@@ -819,7 +867,7 @@ async def yookassa_webhook(request: Request):
                             amount = "0"
                             currency = "RUB"
                     except Exception as e:
-                        print(f"⚠️ Ошибка получения суммы возврата: {e}")
+                        logger.warning(f"⚠️ Ошибка получения суммы возврата: {e}")
                         amount = "0"
                         currency = "RUB"
                     
@@ -835,9 +883,9 @@ async def yookassa_webhook(request: Request):
                                 (tg_user_id,)
                             )
                             await db_conn.commit()
-                        print(f"✅ Подписка пользователя {tg_user_id} отменена из-за возврата")
+                        logger.info(f"✅ Подписка пользователя {tg_user_id} отменена из-за возврата")
                     except Exception as e:
-                        print(f"⚠️ Ошибка отмены подписки: {e}")
+                        logger.warning(f"⚠️ Ошибка отмены подписки: {e}")
                     
                     # Уведомляем пользователя о возврате
                     try:
@@ -849,15 +897,15 @@ async def yookassa_webhook(request: Request):
                             f"Ваша подписка была отменена.\n"
                             f"Деньги будут возвращены на карту в течение нескольких рабочих дней."
                         )
-                        print(f"✅ Отправлено уведомление о возврате пользователю {tg_user_id}")
+                        logger.info(f"✅ Отправлено уведомление о возврате пользователю {tg_user_id}")
                     except Exception as e:
-                        print(f"❌ Ошибка отправки уведомления о возврате пользователю {tg_user_id}: {e}")
+                        logger.error(f"❌ Ошибка отправки уведомления о возврате пользователю {tg_user_id}: {e}")
                 else:
-                    print(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id_refund}")
+                    logger.warning(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id_refund}")
             else:
-                print(f"⚠️ Не удалось получить payment_id из возврата")
+                logger.warning(f"⚠️ Не удалось получить payment_id из возврата")
         except Exception as e:
-            print(f"❌ Ошибка обработки refund.succeeded: {e}")
+            logger.error(f"❌ Ошибка обработки refund.succeeded: {e}")
             import traceback
             traceback.print_exc()
         
@@ -915,10 +963,10 @@ async def yookassa_webhook(request: Request):
         await save_payment_method(tg_user_id, payment_method_id)
         # Автоматически включаем автопродление после первой успешной оплаты
         await set_auto_renewal(tg_user_id, True)
-        print(f"✅ Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (saved={payment_method_saved})")
-        print(f"✅ Автопродление автоматически включено для пользователя {tg_user_id}")
+        logger.info(f"✅ Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (saved={payment_method_saved})")
+        logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id}")
     else:
-        print(f"ℹ️ Платеж {payment_id}: payment_method не сохранен пользователем (saved={payment_method_saved})")
+        logger.info(f"ℹ️ Платеж {payment_id}: payment_method не сохранен пользователем (saved={payment_method_saved})")
     
     # Обновляем статус платежа в БД
     await update_payment_status_async(payment_id, "succeeded")
@@ -946,10 +994,10 @@ async def yookassa_webhook(request: Request):
                 expire_date=datetime.utcnow() + timedelta(hours=24)
             )
             invite_link = invite.invite_link
-            print(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (без заявки) для пользователя {tg_user_id}")
+            logger.info(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (без заявки) для пользователя {tg_user_id}")
         except Exception as e1:
             # Если не получилось, пробуем без параметра creates_join_request (по умолчанию)
-            print(f"⚠️ Первая попытка создания ссылки не удалась: {e1}, пробуем второй вариант")
+            logger.warning(f"⚠️ Первая попытка создания ссылки не удалась: {e1}, пробуем второй вариант")
             try:
                 invite = await bot.create_chat_invite_link(
                     chat_id=CHANNEL_ID,
@@ -957,22 +1005,22 @@ async def yookassa_webhook(request: Request):
                     expire_date=datetime.utcnow() + timedelta(hours=24)
                 )
                 invite_link = invite.invite_link
-                print(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (второй вариант) для пользователя {tg_user_id}")
+                logger.info(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (второй вариант) для пользователя {tg_user_id}")
             except Exception as e2:
                 # Если и это не получилось, пробуем основную ссылку канала
-                print(f"⚠️ Вторая попытка не удалась: {e2}, пробуем основную ссылку канала")
+                logger.warning(f"⚠️ Вторая попытка не удалась: {e2}, пробуем основную ссылку канала")
                 try:
                     chat = await bot.get_chat(CHANNEL_ID)
                     if chat.invite_link:
                         invite_link = chat.invite_link
-                        print(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
+                        logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
                     else:
                         raise Exception("У канала нет основной ссылки")
                 except Exception as e3:
-                    print(f"❌ Все попытки создания ссылки не удались: {e3}")
+                    logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
                     raise e3
     except Exception as e:
-        print(f"❌ Ошибка создания пригласительной ссылки: {e}")
+        logger.error(f"❌ Ошибка создания пригласительной ссылки: {e}")
         import traceback
         traceback.print_exc()
         # Отправляем сообщение об ошибке
@@ -1004,7 +1052,7 @@ async def yookassa_webhook(request: Request):
         else:
             # Если даты не найдены, используем текущее время (запасной вариант)
             starts_at_dt = datetime.utcnow()
-            expires_at_dt = starts_at_dt + timedelta(days=30)
+            expires_at_dt = starts_at_dt + timedelta(days=SUBSCRIPTION_DAYS)
             starts_str = format_datetime_moscow(starts_at_dt)
             expires_str = format_datetime_moscow(expires_at_dt)
 
@@ -1048,7 +1096,7 @@ async def telegram_webhook(request: Request):
                 chat_id = chat_join.chat.id
 
                 # Если пользователь оплатил - автоматически одобряем заявку
-                if is_user_allowed(user_id) and chat_id == CHANNEL_ID:
+                if await is_user_allowed(user_id) and chat_id == CHANNEL_ID:
                     try:
                         await bot.approve_chat_join_request(
                             chat_id=chat_id,
@@ -1057,13 +1105,13 @@ async def telegram_webhook(request: Request):
                         return {"ok": True, "approved": True}
                     except Exception as e:
                         # Логируем ошибку, но не падаем
-                        print(f"Error approving join request: {e}")
+                        logger.error(f"Error approving join request: {e}")
                         return {"ok": True, "approved": False, "error": str(e)}
                 else:
                     # Пользователь не оплатил или это не наш канал
                     return {"ok": True, "approved": False}
         except Exception as e:
-            print(f"Error processing chat_join_request: {e}")
+            logger.error(f"Error processing chat_join_request: {e}")
             return {"ok": True, "error": str(e)}
 
     return {"ok": True}
@@ -1095,7 +1143,7 @@ async def telegram_join_request(request: Request):
         user_id = int(user_id)
 
         # Если пользователь оплатил - автоматически одобряем заявку
-        if is_user_allowed(user_id) and (not chat_id or int(chat_id) == CHANNEL_ID):
+        if await is_user_allowed(user_id) and (not chat_id or int(chat_id) == CHANNEL_ID):
             try:
                 await bot.approve_chat_join_request(
                     chat_id=chat_id or CHANNEL_ID,
@@ -1103,11 +1151,11 @@ async def telegram_join_request(request: Request):
                 )
                 return {"ok": True, "approved": True}
             except Exception as e:
-                print(f"Error approving join request: {e}")
+                logger.error(f"Error approving join request: {e}")
                 return {"ok": True, "approved": False, "error": str(e)}
 
         return {"ok": True, "approved": False}
     except Exception as e:
-        print(f"Error in join_request handler: {e}")
+        logger.error(f"Error in join_request handler: {e}")
         return {"ok": True, "error": str(e)}
 
