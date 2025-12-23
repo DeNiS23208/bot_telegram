@@ -884,14 +884,38 @@ async def yookassa_webhook(request: Request):
         return {"ok": True, "ignored": f"status is {current_status}, not succeeded"}
 
     # Дополнительная проверка: проверяем, что платеж действительно оплачен
-    # Проверяем сумму и статус оплаты
+    # Проверяем поле paid и captured
     try:
-        if hasattr(payment, 'paid') and not payment.paid:
-            logger.warning(f"⚠️ Платеж {payment_id} не оплачен (paid=False), игнорируем")
-            mark_processed(payment_id)
-            return {"ok": True, "ignored": "payment not paid"}
+        # Проверяем поле paid (если доступно)
+        if hasattr(payment, 'paid'):
+            if not payment.paid:
+                logger.warning(f"⚠️ Платеж {payment_id} не оплачен (paid=False), игнорируем")
+                mark_processed(payment_id)
+                return {"ok": True, "ignored": "payment not paid"}
+        
+        # Проверяем поле captured (если доступно) - должно быть True для успешного платежа
+        if hasattr(payment, 'captured'):
+            if not payment.captured:
+                logger.warning(f"⚠️ Платеж {payment_id} не захвачен (captured=False), игнорируем")
+                mark_processed(payment_id)
+                return {"ok": True, "ignored": "payment not captured"}
+        
+        # Проверяем, что сумма платежа больше 0
+        if hasattr(payment, 'amount'):
+            amount_value = None
+            if hasattr(payment.amount, 'value'):
+                amount_value = float(payment.amount.value)
+            elif isinstance(payment.amount, dict):
+                amount_value = float(payment.amount.get('value', 0))
+            
+            if amount_value is not None and amount_value <= 0:
+                logger.warning(f"⚠️ Платеж {payment_id} имеет нулевую или отрицательную сумму ({amount_value}), игнорируем")
+                mark_processed(payment_id)
+                return {"ok": True, "ignored": f"invalid amount: {amount_value}"}
     except Exception as e:
-        logger.warning(f"⚠️ Ошибка проверки статуса оплаты: {e}")
+        logger.error(f"❌ Ошибка проверки параметров платежа: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
 
     meta = payment.metadata or {}
     tg_user_id = meta.get("telegram_user_id")
@@ -908,6 +932,12 @@ async def yookassa_webhook(request: Request):
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Статус платежа {payment_id} изменился с succeeded на {payment_refresh.status} перед активацией подписки!")
         mark_processed(payment_id)
         return {"ok": True, "ignored": f"status changed to {payment_refresh.status}"}
+    
+    # Финальная проверка: убеждаемся что платеж действительно успешен
+    if payment_refresh.status != "succeeded":
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Финальная проверка - статус платежа {payment_id} = {payment_refresh.status}, не succeeded!")
+        mark_processed(payment_id)
+        return {"ok": True, "ignored": f"final check failed: {payment_refresh.status}"}
 
     # разрешаем пользователю вступление
     allow_user(tg_user_id)
