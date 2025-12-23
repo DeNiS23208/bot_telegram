@@ -161,13 +161,24 @@ def clear_old_data():
         print("   python3 clear_db.py --full")
 
 if __name__ == "__main__":
+    # Проверка флага --yes для автоматического подтверждения
+    AUTO_YES = "--yes" in sys.argv or "-y" in sys.argv
+    
     if FULL_CLEAR:
         print("⚠️ ВНИМАНИЕ: Будет выполнена ПОЛНАЯ очистка базы данных!")
         print("   Это удалит все подписки, платежи и данные пользователей.")
-        response = input("Вы уверены? (yes/no): ")
+        if not AUTO_YES:
+            response = input("Вы уверены? (yes/no): ")
+        else:
+            response = "yes"
+            print("✅ Автоматическое подтверждение (--yes)")
     else:
         print("ℹ️ Будет очищена только таблица invite_links.")
-        response = input("Продолжить? (yes/no): ")
+        if not AUTO_YES:
+            response = input("Продолжить? (yes/no): ")
+        else:
+            response = "yes"
+            print("✅ Автоматическое подтверждение (--yes)")
     
     if response.lower() == "yes":
         clear_old_data()
