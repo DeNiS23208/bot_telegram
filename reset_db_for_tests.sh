@@ -14,7 +14,11 @@ expect {
     "# " {
         send "cd /opt/bot_telegram\r"
         expect "# "
-        send "echo 'yes' | python3 clear_db.py --full\r"
+        send "python3 clear_db.py --full << 'PYTHON_INPUT'\r"
+        expect "# "
+        send "yes\r"
+        expect "# "
+        send "PYTHON_INPUT\r"
         expect "# "
         send "echo '---'\r"
         expect "# "
