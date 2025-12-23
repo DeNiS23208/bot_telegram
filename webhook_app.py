@@ -8,7 +8,7 @@ import pytz
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
 from aiogram import Bot
-from aiogram.types import ChatJoinRequest
+from aiogram.types import ChatJoinRequest, ReplyKeyboardMarkup, KeyboardButton
 from yookassa import Payment, Configuration
 from yookassa.domain.notification import WebhookNotificationFactory
 
@@ -300,6 +300,39 @@ def revoke_invite_link(invite_link: str):
     )
     conn.commit()
     conn.close()
+
+
+async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
+    """Создает главное меню для пользователя с учетом статуса подписки"""
+    # Константы кнопок (должны совпадать с bot.py)
+    BTN_PAY_1 = "💳 Оплатить подписку"
+    BTN_MANAGE_SUB = "⚙️ Управление подпиской"
+    BTN_STATUS_1 = "📊 Статус подписки"
+    BTN_ABOUT_1 = "ℹ️ О проекте"
+    BTN_CHECK_1 = "🔍 Проверить оплату"
+    BTN_SUPPORT = "💬 Поддержка"
+    
+    # Проверяем наличие активной подписки
+    from db import get_subscription_expires_at
+    expires_at = await get_subscription_expires_at(telegram_id)
+    now = datetime.utcnow()
+    has_active_subscription = expires_at and expires_at > now
+    
+    # Если есть активная подписка - показываем "Управление подпиской", иначе "Оплатить подписку"
+    payment_button = BTN_MANAGE_SUB if has_active_subscription else BTN_PAY_1
+    
+    keyboard = [
+        [KeyboardButton(text=payment_button)],
+        [KeyboardButton(text=BTN_STATUS_1)],
+        [KeyboardButton(text=BTN_ABOUT_1)],
+        [KeyboardButton(text=BTN_CHECK_1)],
+        [KeyboardButton(text=BTN_SUPPORT)],
+    ]
+    
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+    )
 
 
 async def activate_subscription(telegram_id: int, days: int = 30) -> tuple[datetime, datetime]:
@@ -876,11 +909,14 @@ async def yookassa_webhook(request: Request):
     # Активируем подписку на 30 дней (starts_at, expires_at уже сохранены в activate_subscription)
     await activate_subscription(tg_user_id, days=30)
     
-    # Сохраняем payment_method_id только если метод был сохранен пользователем
+    # Сохраняем payment_method_id и автоматически включаем автопродление, если метод был сохранен пользователем
     if payment_method_id and payment_method_saved:
-        from db import save_payment_method
+        from db import save_payment_method, set_auto_renewal
         await save_payment_method(tg_user_id, payment_method_id)
+        # Автоматически включаем автопродление после первой успешной оплаты
+        await set_auto_renewal(tg_user_id, True)
         print(f"✅ Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (saved={payment_method_saved})")
+        print(f"✅ Автопродление автоматически включено для пользователя {tg_user_id}")
     else:
         print(f"ℹ️ Платеж {payment_id}: payment_method не сохранен пользователем (saved={payment_method_saved})")
     
@@ -897,26 +933,57 @@ async def yookassa_webhook(request: Request):
     except Exception:
         pass  # Игнорируем ошибки разбана
 
-    # Создаем ПРИГЛАСИТЕЛЬНУЮ ссылку БЕЗ заявки (прямой доступ) - пользователь заплатил!
+    # Создаем ПРИГЛАСИТЕЛЬНУЮ ссылку (прямой доступ) - пользователь заплатил!
+    # Пробуем несколько вариантов для максимальной совместимости
     invite_link = None
     try:
-        invite = await bot.create_chat_invite_link(
-            chat_id=CHANNEL_ID,
-            creates_join_request=False,  # БЕЗ заявки - прямой доступ (пользователь заплатил!)
-            member_limit=1,  # Одноразовая ссылка
-            expire_date=datetime.utcnow() + timedelta(hours=24)
-        )
-        invite_link = invite.invite_link
-        print(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (без заявки) для пользователя {tg_user_id}")
+        # Сначала пробуем создать ссылку БЕЗ заявки (если канал поддерживает)
+        try:
+            invite = await bot.create_chat_invite_link(
+                chat_id=CHANNEL_ID,
+                creates_join_request=False,  # БЕЗ заявки - прямой доступ
+                member_limit=1,  # Одноразовая ссылка
+                expire_date=datetime.utcnow() + timedelta(hours=24)
+            )
+            invite_link = invite.invite_link
+            print(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (без заявки) для пользователя {tg_user_id}")
+        except Exception as e1:
+            # Если не получилось, пробуем без параметра creates_join_request (по умолчанию)
+            print(f"⚠️ Первая попытка создания ссылки не удалась: {e1}, пробуем второй вариант")
+            try:
+                invite = await bot.create_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    member_limit=1,  # Одноразовая ссылка
+                    expire_date=datetime.utcnow() + timedelta(hours=24)
+                )
+                invite_link = invite.invite_link
+                print(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (второй вариант) для пользователя {tg_user_id}")
+            except Exception as e2:
+                # Если и это не получилось, пробуем основную ссылку канала
+                print(f"⚠️ Вторая попытка не удалась: {e2}, пробуем основную ссылку канала")
+                try:
+                    chat = await bot.get_chat(CHANNEL_ID)
+                    if chat.invite_link:
+                        invite_link = chat.invite_link
+                        print(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
+                    else:
+                        raise Exception("У канала нет основной ссылки")
+                except Exception as e3:
+                    print(f"❌ Все попытки создания ссылки не удались: {e3}")
+                    raise e3
     except Exception as e:
         print(f"❌ Ошибка создания пригласительной ссылки: {e}")
         import traceback
         traceback.print_exc()
         # Отправляем сообщение об ошибке
+        # Получаем меню с обновленными кнопками
+        menu = await get_main_menu_for_user(tg_user_id)
+        
         await bot.send_message(
             tg_user_id,
             "✅ Оплата подтверждена!\n\n"
-            "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором."
+            "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором.",
+            reply_markup=menu
         )
         mark_processed(payment_id)
         return {"ok": True, "error": "failed to create invite link"}
@@ -941,14 +1008,17 @@ async def yookassa_webhook(request: Request):
             starts_str = format_datetime_moscow(starts_at_dt)
             expires_str = format_datetime_moscow(expires_at_dt)
 
+        # Получаем меню с обновленными кнопками (теперь должна быть "Управление подпиской")
+        menu = await get_main_menu_for_user(tg_user_id)
+        
         await bot.send_message(
             tg_user_id,
             "✅ Оплата подтверждена!\n\n"
             f"Подписка активна с: {starts_str}\n"
             f"Подписка активна до: {expires_str}\n\n"
             "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
-            f"{invite_link}\n\n"
-            "⚠️ Ссылка одноразовая и персональная. Заявка будет одобрена автоматически."
+            f"{invite_link}",
+            reply_markup=menu
         )
 
     mark_processed(payment_id)
