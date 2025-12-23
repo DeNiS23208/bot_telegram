@@ -45,21 +45,12 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 # Имя бота из переменной окружения или по умолчанию
 # Правильное имя бота: work232_bot (без @)
 BOT_USERNAME = os.getenv("BOT_USERNAME", "work232_bot")
-# URL для возврата после оплаты - используем webhook endpoint для обработки возврата
-# Если не указан в env, используем домен с портом 8000
-YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL")
-if YOOKASSA_RETURN_URL:
-    RETURN_URL_BASE = YOOKASSA_RETURN_URL.rstrip('/') + "/payment/return"
-else:
-    # Fallback на Telegram бота, если webhook URL не указан
-    RETURN_URL_BASE = f"https://t.me/{BOT_USERNAME}"
 
-# Функция для формирования return_url с user_id
+# Функция для формирования return_url - всегда ведет на бота
 def get_return_url(telegram_user_id: int) -> str:
-    """Формирует return_url с telegram_user_id для обработки возврата"""
-    if YOOKASSA_RETURN_URL:
-        return f"{RETURN_URL_BASE}?user_id={telegram_user_id}"
-    return RETURN_URL_BASE
+    """Формирует return_url - всегда ведет на бота"""
+    # Всегда возвращаем ссылку на бота, чтобы пользователь вернулся в бота после оплаты
+    return f"https://t.me/{BOT_USERNAME}"
 
 # Для MVP можно фиксированный email, потом заменим на ввод пользователем
 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
