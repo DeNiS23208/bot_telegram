@@ -582,7 +582,8 @@ async def pay(message: Message):
     await message.answer(
         subscription_text,
         reply_markup=keyboard,
-        parse_mode="HTML"
+        parse_mode="HTML",
+        disable_web_page_preview=True  # Отключаем превью ссылок, чтобы документ не отображался
     )
 
 
