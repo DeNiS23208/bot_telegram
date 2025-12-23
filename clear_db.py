@@ -2,9 +2,12 @@
 """
 Скрипт для очистки базы данных от старых записей
 Удаляет записи о пользователях, которые были в канале ранее
+
+Для полной очистки БД (для тестов) используйте флаг --full
 """
 import os
 import sqlite3
+import sys
 
 # Пытаемся загрузить .env, но не падаем если его нет
 try:
@@ -15,6 +18,9 @@ except ImportError:
 
 DB_PATH = os.getenv("DB_PATH", "/opt/bot_telegram/bot.db")
 
+# Проверка флага --full для полной очистки
+FULL_CLEAR = "--full" in sys.argv or "-f" in sys.argv
+
 def clear_old_data():
     """Очищает старые данные из БД"""
     conn = sqlite3.connect(DB_PATH)
@@ -23,7 +29,7 @@ def clear_old_data():
     print("Очистка базы данных...")
     print(f"База данных: {DB_PATH}\n")
     
-    # Сначала создаем таблицы, если их нет (как в webhook_app.py)
+    # Сначала создаем таблицы, если их нет (как в webhook_app.py и db.py)
     print("Создание таблиц, если их нет...")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS processed_payments (
@@ -47,6 +53,32 @@ def clear_old_data():
             FOREIGN KEY (telegram_user_id) REFERENCES approved_users(telegram_user_id)
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            username TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            telegram_id INTEGER PRIMARY KEY,
+            expires_at TEXT,
+            starts_at TEXT,
+            auto_renewal_enabled INTEGER DEFAULT 0,
+            saved_payment_method_id TEXT,
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            payment_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     print("✅ Таблицы проверены/созданы\n")
     
@@ -60,42 +92,83 @@ def clear_old_data():
     cur.execute("SELECT COUNT(*) FROM processed_payments")
     payments_count = cur.fetchone()[0]
     
+    cur.execute("SELECT COUNT(*) FROM subscriptions")
+    subscriptions_count = cur.fetchone()[0]
+    
+    cur.execute("SELECT COUNT(*) FROM payments")
+    payments_table_count = cur.fetchone()[0]
+    
+    cur.execute("SELECT COUNT(*) FROM users")
+    users_count = cur.fetchone()[0]
+    
     print(f"Текущее состояние БД:")
     print(f"  - invite_links: {invite_count} записей")
     print(f"  - approved_users: {approved_count} записей")
-    print(f"  - processed_payments: {payments_count} записей\n")
+    print(f"  - processed_payments: {payments_count} записей")
+    print(f"  - subscriptions: {subscriptions_count} записей")
+    print(f"  - payments: {payments_table_count} записей")
+    print(f"  - users: {users_count} записей\n")
     
-    # Очищаем таблицу invite_links
+    if FULL_CLEAR:
+        print("⚠️ РЕЖИМ ПОЛНОЙ ОЧИСТКИ (для тестов)")
+        print("   Будут удалены ВСЕ данные: подписки, платежи, пользователи\n")
+    else:
+        print("ℹ️ Обычный режим очистки (только invite_links)")
+        print("   Для полной очистки используйте: python3 clear_db.py --full\n")
+    
+    # Очищаем таблицу invite_links (всегда)
     if invite_count > 0:
         cur.execute("DELETE FROM invite_links")
         print(f"✅ Очищена таблица invite_links ({invite_count} записей)")
     else:
         print("ℹ️ Таблица invite_links уже пуста")
     
-    # Очищаем таблицу processed_payments (можно закомментировать, если не нужно)
-    # if payments_count > 0:
-    #     cur.execute("DELETE FROM processed_payments")
-    #     print(f"✅ Очищена таблица processed_payments ({payments_count} записей)")
-    # else:
-    #     print("ℹ️ Таблица processed_payments уже пуста")
-    
-    # Очищаем таблицу approved_users (можно закомментировать, если не нужно)
-    # ⚠️ ВНИМАНИЕ: Если очистить approved_users, пользователям нужно будет оплатить заново!
-    # if approved_count > 0:
-    #     cur.execute("DELETE FROM approved_users")
-    #     print(f"✅ Очищена таблица approved_users ({approved_count} записей)")
-    # else:
-    #     print("ℹ️ Таблица approved_users уже пуста")
+    # Полная очистка для тестов
+    if FULL_CLEAR:
+        # Очищаем подписки
+        if subscriptions_count > 0:
+            cur.execute("DELETE FROM subscriptions")
+            print(f"✅ Очищена таблица subscriptions ({subscriptions_count} записей)")
+        
+        # Очищаем платежи
+        if payments_table_count > 0:
+            cur.execute("DELETE FROM payments")
+            print(f"✅ Очищена таблица payments ({payments_table_count} записей)")
+        
+        # Очищаем approved_users
+        if approved_count > 0:
+            cur.execute("DELETE FROM approved_users")
+            print(f"✅ Очищена таблица approved_users ({approved_count} записей)")
+        
+        # Очищаем processed_payments
+        if payments_count > 0:
+            cur.execute("DELETE FROM processed_payments")
+            print(f"✅ Очищена таблица processed_payments ({payments_count} записей)")
+        
+        # Очищаем users (опционально, можно оставить для истории)
+        # if users_count > 0:
+        #     cur.execute("DELETE FROM users")
+        #     print(f"✅ Очищена таблица users ({users_count} записей)")
     
     conn.commit()
     conn.close()
     
-    print("\n✅ Очистка завершена!")
-    print("\n⚠️ ВНИМАНИЕ: Таблица approved_users НЕ очищена (закомментировано).")
-    print("   Если нужно очистить список оплативших пользователей, раскомментируйте соответствующие строки.")
+    if FULL_CLEAR:
+        print("\n✅ Полная очистка завершена! БД готова для тестов.")
+    else:
+        print("\n✅ Очистка завершена!")
+        print("\n💡 Для полной очистки (включая подписки и платежи) используйте:")
+        print("   python3 clear_db.py --full")
 
 if __name__ == "__main__":
-    response = input("Вы уверены, что хотите очистить базу данных? (yes/no): ")
+    if FULL_CLEAR:
+        print("⚠️ ВНИМАНИЕ: Будет выполнена ПОЛНАЯ очистка базы данных!")
+        print("   Это удалит все подписки, платежи и данные пользователей.")
+        response = input("Вы уверены? (yes/no): ")
+    else:
+        print("ℹ️ Будет очищена только таблица invite_links.")
+        response = input("Продолжить? (yes/no): ")
+    
     if response.lower() == "yes":
         clear_old_data()
     else:
