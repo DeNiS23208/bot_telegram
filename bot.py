@@ -426,6 +426,7 @@ async def cmd_start(message: Message):
             parse_mode="HTML",
             reply_markup=await main_menu(message.from_user.id),
         )
+        return  # Важно: прерываем выполнение, чтобы не было дублирования
 
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_STATUS_1)
