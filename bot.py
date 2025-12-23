@@ -159,6 +159,8 @@ async def cmd_start(message: Message):
         return
     
     # Путь к видео или URL
+    # Приоритет: 1) локальный файл ScreenRecording, 2) WELCOME_VIDEO_PATH, 3) WELCOME_VIDEO_URL
+    VIDEO_RECORDING_PATH = os.path.join(os.path.dirname(__file__), "ScreenRecording_12-23-2025 10-50-29_1.MP4")
     VIDEO_PATH = os.getenv("WELCOME_VIDEO_PATH", "/opt/bot_telegram/welcome_video.mp4")
     VIDEO_GIF_PATH = os.getenv("WELCOME_VIDEO_GIF_PATH", "/opt/bot_telegram/welcome_video.gif")  # GIF для авто-воспроизведения
     VIDEO_URL = os.getenv("WELCOME_VIDEO_URL", None)  # Можно указать URL видео
@@ -179,9 +181,46 @@ async def cmd_start(message: Message):
     # Отправляем видео с текстом в caption (встроено в сообщение)
     video_sent = False
 
-    # ПРИОРИТЕТ: Сначала пробуем GIF файл для автоматического воспроизведения в Desktop
+    # ПРИОРИТЕТ 1: Сначала пробуем файл ScreenRecording
+    if os.path.exists(VIDEO_RECORDING_PATH):
+        try:
+            file_size = os.path.getsize(VIDEO_RECORDING_PATH)
+            file_size_mb = file_size / 1024 / 1024
+            print(f"📹 Найден файл ScreenRecording, размер: {file_size_mb:.1f}MB")
+            
+            video_file = FSInputFile(VIDEO_RECORDING_PATH)
+            max_video_size = MAX_VIDEO_SIZE_MB * 1024 * 1024
+            
+            if file_size > max_video_size:
+                print(f"⚠️ Видео слишком большое ({file_size_mb:.1f}MB), отправляю как документ")
+                await bot.send_document(
+                    chat_id=message.chat.id,
+                    document=video_file,
+                    caption=welcome_text,
+                    parse_mode="HTML",
+                    reply_markup=await main_menu(message.from_user.id),
+                )
+                print(f"✅ Видео отправлено как документ: {VIDEO_RECORDING_PATH}")
+            else:
+                await bot.send_video(
+                    chat_id=message.chat.id,
+                    video=video_file,
+                    caption=welcome_text,
+                    parse_mode="HTML",
+                    supports_streaming=True,
+                    reply_markup=await main_menu(message.from_user.id),
+                )
+                print(f"✅ Видео успешно отправлено: {VIDEO_RECORDING_PATH}")
+            video_sent = True
+            return  # Прерываем выполнение
+        except Exception as e:
+            print(f"⚠️ Ошибка отправки ScreenRecording: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # ПРИОРИТЕТ 2: Пробуем GIF файл для автоматического воспроизведения в Desktop
     # GIF анимации в Telegram могут автоматически воспроизводиться при прокрутке
-    if os.path.exists(VIDEO_GIF_PATH):
+    if not video_sent and os.path.exists(VIDEO_GIF_PATH):
         try:
             gif_size = os.path.getsize(VIDEO_GIF_PATH)
             gif_size_mb = gif_size / 1024 / 1024
