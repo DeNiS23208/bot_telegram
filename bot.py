@@ -6,7 +6,8 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, ContentType, WebAppInfo
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, ContentType, WebAppInfo, ChatMemberUpdated
+from aiogram.enums import ChatMemberStatus
 from aiogram.enums import ChatAction
 from dotenv import load_dotenv
 
@@ -1091,6 +1092,38 @@ async def approve_join_request(join_request: ChatJoinRequest):
                 print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
         else:
             print(f"⏸️ Пользователь {user_id} не оплатил, заявка не одобрена")
+
+
+# Обработчик присоединения пользователей к каналу - отзываем ссылку после первого использования
+@dp.chat_member()
+async def on_chat_member_update(update: ChatMemberUpdated):
+    """Отслеживает присоединение пользователей к каналу и отзывает ссылку после первого использования"""
+    # Проверяем, что это наш канал
+    if update.chat.id != CHANNEL_ID:
+        return
+    
+    # Проверяем, что пользователь присоединился (стал member)
+    if update.new_chat_member.status == ChatMemberStatus.MEMBER:
+        user_id = update.new_chat_member.user.id
+        
+        # Получаем ссылку пользователя из БД
+        invite_link = await get_invite_link(user_id)
+        
+        if invite_link:
+            try:
+                # Отзываем ссылку через Telegram API (делает её невалидной для всех)
+                await bot.revoke_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    invite_link=invite_link
+                )
+                
+                # Помечаем ссылку как отозванную в БД
+                from webhook_app import revoke_invite_link
+                revoke_invite_link(invite_link)
+                
+                print(f"✅ Ссылка пользователя {user_id} отозвана после первого использования")
+            except Exception as e:
+                print(f"⚠️ Ошибка отзыва ссылки для пользователя {user_id}: {e}")
 
 
 async def main():
