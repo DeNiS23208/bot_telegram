@@ -793,7 +793,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         
         await message.answer(
             "✅ <b>Успешно!</b>\n\n"
-            f"Кнопка отправлена в канал.\n\n"
+            f"Кнопка НАВИГАЦИЯ отправлена в канал.\n\n"
             f"Теперь закрепите это сообщение в канале.",
             parse_mode="HTML"
         )
