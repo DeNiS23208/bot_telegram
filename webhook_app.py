@@ -533,11 +533,13 @@ async def check_expired_subscriptions():
                     
                     # Если подписка уже истекла
                     if expires_at <= now:
+                        auto_payment_failed = False
+                        
                         # Проверяем, включено ли автопродление и есть ли сохраненный способ оплаты
                         if auto_renewal_enabled and saved_payment_method_id:
                             # Пытаемся выполнить автоматическое списание
                             try:
-                                from payments import create_auto_payment
+                                from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
                                 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
@@ -554,8 +556,23 @@ async def check_expired_subscriptions():
                                 # Сохраняем платеж
                                 await save_payment(telegram_id, payment_id, status=payment_status)
                                 
-                                # Если платеж успешен, активируем подписку
-                                if payment_status == "succeeded":
+                                # Если платеж сразу не succeeded, ждем webhook или проверяем статус
+                                if payment_status != "succeeded":
+                                    logger.info(f"ℹ️ Автоплатеж {payment_id} для пользователя {telegram_id} в статусе {payment_status}, ждем webhook или повторную проверку.")
+                                    # Даем немного времени на обработку webhook
+                                    await asyncio.sleep(3)
+                                    # Проверяем статус еще раз
+                                    refreshed_status = get_payment_status(payment_id)
+                                    await update_payment_status(payment_id, refreshed_status)
+                                    if refreshed_status != "succeeded":
+                                        auto_payment_failed = True
+                                        logger.warning(f"⚠️ Автоплатеж {payment_id} для пользователя {telegram_id} не завершился успешно после ожидания, статус: {refreshed_status}")
+                                    else:
+                                        payment_status = refreshed_status
+                                        logger.info(f"✅ Автоплатеж {payment_id} для пользователя {telegram_id} успешно завершен после ожидания.")
+                                
+                                # Если платеж успешен (сразу или после ожидания)
+                                if payment_status == "succeeded" and not auto_payment_failed:
                                     await activate_subscription_days(telegram_id, days=SUBSCRIPTION_DAYS)
                                     
                                     # Разбаниваем пользователя, если был забанен
@@ -578,21 +595,16 @@ async def check_expired_subscriptions():
                                     )
                                     logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}")
                                 else:
-                                    # Платеж не прошел, отправляем уведомление
-                                    await bot.send_message(
-                                        telegram_id,
-                                        "⚠️ Не удалось автоматически продлить подписку\n\n"
-                                        "Пожалуйста, оплатите подписку вручную, нажав кнопку 💳 Оплатить подписку."
-                                    )
+                                    # Платеж не прошел
+                                    auto_payment_failed = True
                                     logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, payment_id: {payment_id}, status: {payment_status}")
                                     
                             except Exception as auto_payment_error:
                                 logger.error(f"❌ Ошибка автоматического списания для пользователя {telegram_id}: {auto_payment_error}")
-                                # Продолжаем выполнение, отправляем ссылку на оплату
-                                auto_renewal_enabled = False  # Отключаем автопродление для этого цикла
+                                auto_payment_failed = True
                         
-                        # Если автопродление не включено или не удалось, отправляем ссылку на оплату
-                        if not auto_renewal_enabled or not saved_payment_method_id:
+                        # Если автопродление не включено или не удалось, баним и отправляем ссылку на оплату
+                        if not auto_renewal_enabled or not saved_payment_method_id or auto_payment_failed:
                             # Отзываем ссылку пользователя (делаем её невалидной)
                             from db import get_invite_link
                             user_invite_link = await get_invite_link(telegram_id)
