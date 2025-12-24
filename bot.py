@@ -783,10 +783,11 @@ async def cmd_send_miniapp_to_channel(message: Message):
         )
         
         # Отправляем сообщение с кнопкой в канал
-        # Telegram требует, чтобы сообщение имело текст, даже если есть кнопка
+        # Telegram требует, чтобы сообщение имело непустой текст, даже если есть кнопка
+        # Используем невидимый символ или минимальный текст
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
-            text=" ",  # Минимальный текст (пробел) - требуется Telegram API
+            text="\u200B",  # Невидимый символ (zero-width space) - требуется Telegram API
             reply_markup=keyboard
         )
         
