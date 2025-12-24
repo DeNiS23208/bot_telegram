@@ -1018,26 +1018,29 @@ async def yookassa_webhook(request: Request):
         else:
             logger.warning(f"⚠️ Не удалось определить saved для payment_method: {pm}")
         
-        # Получаем ID метода оплаты (пробуем получить даже если saved=False, на случай если YooKassa вернул id)
-        # ВАЖНО: payment_method.id может быть равен payment.id для первого платежа
-        # Но для автоплатежей нужен ID сохраненного способа оплаты
+        # Получаем ID метода оплаты
+        # ВАЖНО: Для автоплатежей в YooKassa payment_method.id может быть равен payment.id
+        # Это нормально - YooKassa использует этот ID для последующих автоплатежей
+        # Но нужно убедиться, что способ оплаты действительно сохранен (saved=True)
         if hasattr(pm, 'id'):
             payment_method_id = pm.id
             logger.info(f"🆔 payment_method.id = {payment_method_id} (атрибут)")
-            # Проверяем, не равен ли он payment.id (это может быть проблемой)
+            # Проверяем, не равен ли он payment.id
             if payment_method_id == payment_id:
-                logger.warning(f"⚠️ ВНИМАНИЕ: payment_method.id ({payment_method_id}) равен payment.id! Это может быть проблемой для автоплатежей.")
-                # Пробуем получить ID из других полей
-                if hasattr(pm, 'card') and hasattr(pm.card, 'last4'):
-                    logger.info(f"💳 Информация о карте: последние 4 цифры: {pm.card.last4}")
-                # Для первого платежа payment_method.id может быть равен payment.id
-                # Но YooKassa должен вернуть правильный ID для последующих автоплатежей
-                # Пока используем этот ID, но добавим предупреждение
+                logger.info(f"ℹ️ payment_method.id ({payment_method_id}) равен payment.id - это нормально для первого платежа в YooKassa")
+            # Пробуем получить дополнительную информацию о карте
+            if hasattr(pm, 'card'):
+                card_info = {}
+                if hasattr(pm.card, 'last4'):
+                    card_info['last4'] = pm.card.last4
+                if hasattr(pm.card, 'card_type'):
+                    card_info['card_type'] = pm.card.card_type
+                logger.info(f"💳 Информация о карте: {card_info}")
         elif isinstance(pm, dict) and 'id' in pm:
             payment_method_id = pm['id']
             logger.info(f"🆔 payment_method['id'] = {payment_method_id} (dict)")
             if payment_method_id == payment_id:
-                logger.warning(f"⚠️ ВНИМАНИЕ: payment_method['id'] ({payment_method_id}) равен payment.id! Это может быть проблемой для автоплатежей.")
+                logger.info(f"ℹ️ payment_method['id'] ({payment_method_id}) равен payment.id - это нормально для первого платежа в YooKassa")
         else:
             logger.warning(f"⚠️ Не удалось получить id для payment_method: {pm}")
     else:

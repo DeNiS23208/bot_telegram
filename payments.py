@@ -146,7 +146,11 @@ def create_auto_payment(
         # Логируем детали для отладки
         print(f"🔍 Создан автоплатеж: payment_id={payment.id}, status={payment.status}, payment_method_id={payment_method_id}")
         if hasattr(payment, 'cancellation_details') and payment.cancellation_details:
-            print(f"⚠️ Детали отмены: {payment.cancellation_details}")
+            cd = payment.cancellation_details
+            party = getattr(cd, 'party', None) if hasattr(cd, 'party') else None
+            reason = getattr(cd, 'reason', None) if hasattr(cd, 'reason') else None
+            print(f"⚠️ Детали отмены автоплатежа: party={party}, reason={reason}")
+            print(f"⚠️ Полный объект cancellation_details: {cd}")
         return payment.id, payment.status
     except Exception as e:
         # Логируем ошибку для отладки
