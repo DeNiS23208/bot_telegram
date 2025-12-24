@@ -778,7 +778,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="НАВИГАЦИЯ",
+                    text="не навигация",
                     url=mini_app_url  # Используем url вместо web_app
                 )
             ]]
