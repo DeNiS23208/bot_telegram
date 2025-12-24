@@ -695,9 +695,12 @@ async def check_expired_subscriptions():
                 except Exception as e:
                     logger.error(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
             
-            # Очищаем обработанных пользователей при достижении лимита
+            # Очищаем обработанных пользователей при достижении лимита (оставляем только последние N)
             if len(processed_users) > MAX_NOTIFIED_USERS_CACHE_SIZE:
-                processed_users.clear()
+                # Сортируем по времени и оставляем только последние N
+                sorted_users = sorted(processed_users.items(), key=lambda x: x[1], reverse=True)
+                processed_users = dict(sorted_users[:MAX_NOTIFIED_USERS_CACHE_SIZE])
+                logger.info(f"🧹 Очищен processed_users, оставлено {len(processed_users)} записей")
                     
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновой задаче проверки подписок: {e}")
