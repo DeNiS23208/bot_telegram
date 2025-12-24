@@ -772,26 +772,49 @@ async def cmd_send_miniapp_to_channel(message: Message):
         return
     
     try:
-        # Создаем кнопку с WebApp для открытия mini app
-        # Важно: WebAppInfo должен быть создан правильно
-        web_app_info = WebAppInfo(url=mini_app_url)
+        # Используем прямой вызов Telegram Bot API для отправки WebApp кнопки
+        # Это более надежный способ для каналов
+        import json
+        import aiohttp
         
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="НАВИГАЦИЯ",
-                    web_app=web_app_info
-                )
-            ]]
-        )
+        api_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         
-        # Отправляем сообщение с кнопкой в канал
-        # Telegram требует, чтобы сообщение имело непустой текст
-        sent_message = await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=".",  # Минимальный текст - требуется Telegram API
-            reply_markup=keyboard
-        )
+        payload = {
+            "chat_id": CHANNEL_ID,
+            "text": ".",  # Минимальный текст - требуется Telegram API
+            "reply_markup": {
+                "inline_keyboard": [[
+                    {
+                        "text": "НАВИГАЦИЯ",
+                        "web_app": {
+                            "url": mini_app_url
+                        }
+                    }
+                ]]
+            }
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json=payload) as response:
+                result = await response.json()
+                if not result.get("ok"):
+                    raise Exception(f"Telegram API error: {result.get('description', 'Unknown error')}")
+        
+        # Альтернативный способ через aiogram (если прямой API не работает)
+        # web_app_info = WebAppInfo(url=mini_app_url)
+        # keyboard = InlineKeyboardMarkup(
+        #     inline_keyboard=[[
+        #         InlineKeyboardButton(
+        #             text="НАВИГАЦИЯ",
+        #             web_app=web_app_info
+        #         )
+        #     ]]
+        # )
+        # sent_message = await bot.send_message(
+        #     chat_id=CHANNEL_ID,
+        #     text=".",
+        #     reply_markup=keyboard
+        # )
         
         await message.answer(
             "✅ <b>Успешно!</b>\n\n"
