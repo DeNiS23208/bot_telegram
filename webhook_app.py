@@ -689,12 +689,11 @@ async def check_expired_subscriptions():
                                     processed_users[notification_sent_key] = datetime.utcnow()
                                     logger.info(f"📧 Отправлено уведомление об отключении автопродления пользователю {telegram_id}")
                             else:
-                                # Отправляем уведомление об истечении подписки (только один раз)
+                                # Отправляем уведомление об истечении подписки (только один раз, больше никогда)
                                 notification_sent_key = f"subscription_expired_notification_{telegram_id}"
-                                notification_sent_time = processed_users.get(notification_sent_key)
                                 
-                                # Отправляем уведомление только если не отправляли или прошло больше 24 часов
-                                if not notification_sent_time or (datetime.utcnow() - notification_sent_time).total_seconds() > 86400:
+                                # Отправляем уведомление только если еще не отправляли
+                                if notification_sent_key not in processed_users:
                                     await bot.send_message(
                                         telegram_id,
                                         "⏰ <b>Ваша подписка истекла</b>\n\n"
@@ -702,7 +701,7 @@ async def check_expired_subscriptions():
                                         parse_mode="HTML"
                                     )
                                     processed_users[notification_sent_key] = datetime.utcnow()
-                                    logger.info(f"📧 Отправлено уведомление об истечении подписки пользователю {telegram_id}")
+                                    logger.info(f"📧 Отправлено уведомление об истечении подписки пользователю {telegram_id} (один раз)")
                         
                         # Добавляем пользователя в processed_users с текущим временем
                         processed_users[telegram_id] = datetime.utcnow()
