@@ -19,9 +19,8 @@ YOOKASSA_RETURN_URL=https://xasanim.ru
 # Welcome video URL
 WELCOME_VIDEO_URL=https://xasanim.ru/videos/welcome_video.mp4
 
-# Mini App URL (опционально, для команды /miniapp)
-# Если не указан, будет использована стандартная ссылка на бота
-# MINI_APP_URL=https://t.me/xasanimbot/miniapp
+# Mini App URL (для команды /miniapp)
+MINI_APP_URL=https://t.me/xasanimbot/miniapp
 ```
 
 ## Важные исправления
