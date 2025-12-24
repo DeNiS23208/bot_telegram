@@ -1092,23 +1092,6 @@ async def yookassa_webhook(request: Request):
             f"{invite_link}",
             reply_markup=menu
         )
-        
-        # Отправляем ссылку на mini app в канал (если настроена)
-        mini_app_url = os.getenv("MINI_APP_URL", None)
-        if mini_app_url and CHANNEL_ID:
-            try:
-                await bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=(
-                        "📱 <b>Mini App</b>\n\n"
-                        f"Откройте наше приложение:\n\n"
-                        f"{mini_app_url}"
-                    ),
-                    parse_mode="HTML"
-                )
-                logger.info(f"✅ Ссылка на mini app отправлена в канал {CHANNEL_ID}")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка отправки mini app в канал: {e}")
 
     mark_processed(payment_id)
     return {"ok": True, "payment_id": payment_id}

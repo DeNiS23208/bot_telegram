@@ -749,46 +749,9 @@ async def send_channel_link(message: Message):
             )
 
 
-@dp.message(Command("miniapp"))
-async def cmd_miniapp(message: Message):
-    """Команда для получения ссылки на mini app"""
-    mini_app_url = os.getenv("MINI_APP_URL", None)
-    
-    if mini_app_url:
-        await message.answer(
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📱 <b>Mini App</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Ссылка на mini app приложение:\n\n"
-            f"{mini_app_url}\n\n"
-            "💡 Эту ссылку можно закрепить на канале.",
-            parse_mode="HTML"
-        )
-    else:
-        # Если URL не указан, формируем стандартную ссылку
-        bot_username = BOT_USERNAME
-        # Стандартный формат: https://t.me/{bot_username}/{web_app_name}
-        # Если web_app_name не указан, используем просто имя бота
-        default_url = f"https://t.me/{bot_username}"
-        
-        await message.answer(
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📱 <b>Mini App</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Ссылка на бота: {default_url}\n\n"
-            "💡 Для настройки mini app:\n"
-            "1. Откройте @BotFather\n"
-            "2. Выберите вашего бота\n"
-            "3. Нажмите 'Bot Settings' → 'Menu Button'\n"
-            "4. Укажите URL вашего mini app\n\n"
-            "После настройки добавьте переменную MINI_APP_URL в .env файл.",
-            parse_mode="HTML"
-        )
-
-
 @dp.message(Command("send_miniapp_to_channel"))
 async def cmd_send_miniapp_to_channel(message: Message):
-    """Команда для отправки ссылки на mini app в канал (только для администраторов)"""
+    """Команда для отправки кнопки НАВИГАЦИЯ (mini app) в канал"""
     if not CHANNEL_ID:
         await message.answer(
             "❌ <b>Ошибка</b>\n\n"
@@ -809,22 +772,27 @@ async def cmd_send_miniapp_to_channel(message: Message):
         return
     
     try:
-        # Отправляем ссылку на mini app в канал
-        await bot.send_message(
+        # Создаем кнопку с WebApp для открытия mini app
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="НАВИГАЦИЯ",
+                    web_app=WebAppInfo(url=mini_app_url)
+                )
+            ]]
+        )
+        
+        # Отправляем сообщение с кнопкой в канал
+        sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
-            text=(
-                "📱 <b>Mini App</b>\n\n"
-                f"Откройте наше приложение:\n\n"
-                f"{mini_app_url}"
-            ),
-            parse_mode="HTML"
+            text="",  # Пустое сообщение или можно добавить текст
+            reply_markup=keyboard
         )
         
         await message.answer(
             "✅ <b>Успешно!</b>\n\n"
-            f"Ссылка на mini app отправлена в канал:\n"
-            f"<code>{CHANNEL_ID}</code>\n\n"
-            f"Ссылка: {mini_app_url}",
+            f"Кнопка НАВИГАЦИЯ отправлена в канал.\n\n"
+            f"Теперь закрепите это сообщение в канале.",
             parse_mode="HTML"
         )
     except Exception as e:
