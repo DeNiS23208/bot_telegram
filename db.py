@@ -322,3 +322,36 @@ async def is_user_allowed(telegram_user_id: int) -> bool:
             return row is not None
     except Exception:
         return False
+
+
+async def get_invite_link(telegram_id: int) -> Optional[str]:
+    """
+    Получает последнюю активную ссылку-приглашение для пользователя
+    Возвращает ссылку или None если не найдена
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Сначала проверяем, есть ли таблица invite_links
+            cur = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='invite_links'"
+            )
+            table_exists = await cur.fetchone()
+            
+            if not table_exists:
+                return None
+            
+            # Получаем последнюю неотозванную ссылку для пользователя
+            cur = await db.execute(
+                """
+                SELECT invite_link 
+                FROM invite_links 
+                WHERE telegram_user_id = ? AND (revoked IS NULL OR revoked = 0)
+                ORDER BY created_at DESC 
+                LIMIT 1
+                """,
+                (telegram_id,)
+            )
+            row = await cur.fetchone()
+            return row[0] if row and row[0] else None
+    except Exception:
+        return None

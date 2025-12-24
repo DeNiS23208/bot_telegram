@@ -25,6 +25,7 @@ from db import (
     set_auto_renewal,
     delete_payment_method,
     is_user_allowed,
+    get_invite_link,
 )
 from utils import format_datetime_moscow
 from payments import create_payment, get_payment_status, get_payment_url
@@ -70,6 +71,7 @@ BTN_STATUS_1 = "📊 Статус подписки"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "🔍 Проверить оплату"
 BTN_SUPPORT = "💬 Поддержка"
+BTN_CHANNEL_LINK = "🔗 Ссылка на канал"  # Показывается только если есть активная подписка
 
 
 async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
@@ -88,10 +90,17 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text=payment_button)],
         [KeyboardButton(text=BTN_STATUS_1)],
+    ]
+    
+    # Добавляем кнопку "Ссылка на канал" только если есть активная подписка
+    if has_active_subscription:
+        keyboard.append([KeyboardButton(text=BTN_CHANNEL_LINK)])
+    
+    keyboard.extend([
         [KeyboardButton(text=BTN_ABOUT_1)],
         [KeyboardButton(text=BTN_CHECK_1)],
         [KeyboardButton(text=BTN_SUPPORT)],
-    ]
+    ])
     
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -664,6 +673,117 @@ async def support(message: Message):
         "• Любыми другими вопросами",
         parse_mode="HTML"
     )
+
+
+@dp.message(lambda m: (m.text or "").strip() == BTN_CHANNEL_LINK)
+async def send_channel_link(message: Message):
+    """Обработчик кнопки отправки ссылки на канал"""
+    await send_typing_action(message.chat.id)
+    user_id = message.from_user.id
+    
+    # Проверяем, есть ли активная подписка
+    expires_at = await get_subscription_expires_at(user_id)
+    now = datetime.utcnow()
+    
+    if not expires_at or expires_at <= now:
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "❌ <b>Подписка не активна</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "У вас нет активной подписки для доступа к каналу.\n\n"
+            "💡 Для получения доступа нажмите кнопку 💳 Оплатить подписку",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Получаем ссылку на канал из БД
+    invite_link = await get_invite_link(user_id)
+    
+    if invite_link:
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔗 <b>Ссылка на канал</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📅 <b>Подписка активна до:</b> {expires_str}\n\n"
+            "Нажмите на ссылку ниже, чтобы попасть в канал:\n\n"
+            f"{invite_link}\n\n"
+            "💡 Если ссылка не работает, обратитесь в поддержку: @otd_zabota",
+            parse_mode="HTML"
+        )
+    else:
+        # Если ссылка не найдена в БД, пытаемся создать новую
+        try:
+            from aiogram import Bot
+            bot_instance = Bot(token=TOKEN)
+            
+            # Пытаемся создать новую ссылку
+            invite = await bot_instance.create_chat_invite_link(
+                chat_id=CHANNEL_ID,
+                member_limit=1,
+                expire_date=expires_at
+            )
+            invite_link = invite.invite_link
+            
+            expires_str = format_datetime_moscow(expires_at)
+            await message.answer(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔗 <b>Ссылка на канал</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📅 <b>Подписка активна до:</b> {expires_str}\n\n"
+                "Нажмите на ссылку ниже, чтобы попасть в канал:\n\n"
+                f"{invite_link}\n\n"
+                "💡 Если ссылка не работает, обратитесь в поддержку: @otd_zabota",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            print(f"❌ Ошибка создания ссылки на канал: {e}")
+            await message.answer(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "❌ <b>Ошибка получения ссылки</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Не удалось получить ссылку на канал.\n\n"
+                "💬 Обратитесь в поддержку: @otd_zabota\n\n"
+                "Мы поможем вам получить доступ к каналу.",
+                parse_mode="HTML"
+            )
+
+
+@dp.message(Command("miniapp"))
+async def cmd_miniapp(message: Message):
+    """Команда для получения ссылки на mini app"""
+    mini_app_url = os.getenv("MINI_APP_URL", None)
+    
+    if mini_app_url:
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📱 <b>Mini App</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Ссылка на mini app приложение:\n\n"
+            f"{mini_app_url}\n\n"
+            "💡 Эту ссылку можно закрепить на канале.",
+            parse_mode="HTML"
+        )
+    else:
+        # Если URL не указан, формируем стандартную ссылку
+        bot_username = BOT_USERNAME
+        # Стандартный формат: https://t.me/{bot_username}/{web_app_name}
+        # Если web_app_name не указан, используем просто имя бота
+        default_url = f"https://t.me/{bot_username}"
+        
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📱 <b>Mini App</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Ссылка на бота: {default_url}\n\n"
+            "💡 Для настройки mini app:\n"
+            "1. Откройте @BotFather\n"
+            "2. Выберите вашего бота\n"
+            "3. Нажмите 'Bot Settings' → 'Menu Button'\n"
+            "4. Укажите URL вашего mini app\n\n"
+            "После настройки добавьте переменную MINI_APP_URL в .env файл.",
+            parse_mode="HTML"
+        )
 
 
 # Обработчик для кнопки "Управление подпиской"
