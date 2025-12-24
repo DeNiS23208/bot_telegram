@@ -688,7 +688,9 @@ async def check_expired_subscriptions():
                                 
                                 logger.info(f"✅ Отправлена ссылка на продление подписки пользователю {telegram_id}")
                         
-                        processed_users.add(telegram_id)
+                        # Добавляем пользователя в processed_users с текущим временем
+                        processed_users[telegram_id] = datetime.utcnow()
+                        logger.info(f"✅ Пользователь {telegram_id} добавлен в processed_users")
                         
                 except Exception as e:
                     logger.error(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
