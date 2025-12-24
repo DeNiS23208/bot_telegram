@@ -514,11 +514,18 @@ async def check_subscriptions_expiring_soon():
 
 async def check_expired_subscriptions():
     """Проверяет истекшие подписки и выполняет автопродление или отправляет ссылку на оплату"""
-    processed_users = set()  # Чтобы не отправлять несколько раз одному пользователю
+    processed_users = {}  # {telegram_id: timestamp} - чтобы не отправлять несколько раз одному пользователю в течение короткого времени
     
     while True:
         try:
             await asyncio.sleep(CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS)
+            
+            # Очищаем processed_users от записей старше 5 минут (чтобы можно было повторить попытку)
+            now = datetime.utcnow()
+            expired_processed = [uid for uid, ts in processed_users.items() if (now - ts).total_seconds() > 300]
+            for uid in expired_processed:
+                del processed_users[uid]
+                logger.info(f"🔄 Удален пользователь {uid} из processed_users (прошло более 5 минут)")
             
             # Проверяем подписки, которые истекли
             expired_subs = await get_expired_subscriptions()
@@ -533,9 +540,16 @@ async def check_expired_subscriptions():
                 
                 logger.info(f"📋 Обработка подписки пользователя {telegram_id}: expires_at={expires_at_str}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                 
+                # Проверяем, был ли пользователь обработан недавно (в течение последних 2 минут)
                 if telegram_id in processed_users:
-                    logger.info(f"⏭️ Пользователь {telegram_id} уже обработан, пропускаем")
-                    continue
+                    time_since_processed = (now - processed_users[telegram_id]).total_seconds()
+                    if time_since_processed < 120:  # 2 минуты
+                        logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
+                        continue
+                    else:
+                        # Удаляем из processed_users, если прошло больше 2 минут
+                        del processed_users[telegram_id]
+                        logger.info(f"🔄 Пользователь {telegram_id} был обработан {time_since_processed:.0f} секунд назад, повторяем попытку")
                     
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
