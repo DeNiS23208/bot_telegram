@@ -621,13 +621,36 @@ async def check_expired_subscriptions():
                                     )
                                     logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}")
                                 else:
-                                    # Платеж не прошел
+                                    # Платеж не прошел - ОТКЛЮЧАЕМ автопродление автоматически
                                     auto_payment_failed = True
                                     logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, payment_id: {payment_id}, status: {payment_status}")
+                                    
+                                    # Автоматически отключаем автопродление при неудаче
+                                    from db import set_auto_renewal
+                                    await set_auto_renewal(telegram_id, False)
+                                    logger.info(f"🔄 Автопродление автоматически отключено для пользователя {telegram_id} из-за неудачного автоплатежа")
+                                    
+                                    # Уведомляем пользователя об отключении автопродления (только один раз)
+                                    if telegram_id not in processed_users or (datetime.utcnow() - processed_users.get(telegram_id, datetime.utcnow())).total_seconds() > 300:
+                                        try:
+                                            await bot.send_message(
+                                                telegram_id,
+                                                "⚠️ <b>Автопродление отключено</b>\n\n"
+                                                "Автоматическое продление подписки было отключено из-за неудачной попытки списания средств.\n\n"
+                                                "Для продления подписки нажмите кнопку 💳 Оплатить подписку.",
+                                                parse_mode="HTML"
+                                            )
+                                        except Exception as e:
+                                            logger.warning(f"⚠️ Ошибка отправки уведомления об отключении автопродления: {e}")
                                     
                             except Exception as auto_payment_error:
                                 logger.error(f"❌ Ошибка автоматического списания для пользователя {telegram_id}: {auto_payment_error}")
                                 auto_payment_failed = True
+                                
+                                # Автоматически отключаем автопродление при ошибке
+                                from db import set_auto_renewal
+                                await set_auto_renewal(telegram_id, False)
+                                logger.info(f"🔄 Автопродление автоматически отключено для пользователя {telegram_id} из-за ошибки автоплатежа")
                         
                         # Если автопродление не включено или не удалось, баним и отправляем ссылку на оплату
                         if not auto_renewal_enabled or not saved_payment_method_id or auto_payment_failed:
@@ -1069,16 +1092,32 @@ async def yookassa_webhook(request: Request):
     await activate_subscription(tg_user_id, days=SUBSCRIPTION_DAYS)
     logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {SUBSCRIPTION_DAYS * 1440:.0f} минут")
     
+    # Проверяем тип платежного метода - для QR-кода и других методов без карты не включаем автопродление
+    payment_method_type = None
+    if hasattr(payment, 'payment_method') and payment.payment_method:
+        pm = payment.payment_method
+        if hasattr(pm, 'type'):
+            payment_method_type = pm.type
+        elif isinstance(pm, dict) and 'type' in pm:
+            payment_method_type = pm['type']
+        logger.info(f"🔍 Тип платежного метода: {payment_method_type}")
+    
     # Сохраняем payment_method_id и автоматически включаем автопродление
-    # ВАЖНО: Сохраняем payment_method_id даже если saved=False, если id есть
-    # Это нужно для случаев, когда YooKassa вернул id, но saved может быть False из-за особенностей API
-    if payment_method_id:
-        from db import save_payment_method, set_auto_renewal
-        await save_payment_method(tg_user_id, payment_method_id)
-        logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
-        
-        # Включаем автопродление если метод был сохранен пользователем ИЛИ если id есть (на случай если saved не работает правильно)
-        if payment_method_saved:
+    # ВАЖНО: Автопродление включаем ТОЛЬКО если:
+    # 1. payment_method_id есть
+    # 2. payment_method_saved = True (пользователь явно сохранил карту)
+    # 3. Тип платежного метода - банковская карта (не QR-код и не другие методы)
+    if payment_method_id and payment_method_saved:
+        # Проверяем, что это банковская карта (не QR-код)
+        if payment_method_type and payment_method_type.lower() not in ['bank_card', 'card']:
+            logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (только банковские карты)")
+            payment_method_id = None  # Не сохраняем для не-карт
+        else:
+            from db import save_payment_method, set_auto_renewal
+            await save_payment_method(tg_user_id, payment_method_id)
+            logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
+            
+            # Включаем автопродление только если карта сохранена
             await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True)")
             
@@ -1094,13 +1133,13 @@ async def yookassa_webhook(request: Request):
                 )
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка отправки уведомления о сохранении карты: {e}")
-        else:
-            # Если saved=False, но id есть, все равно включаем автопродление (на случай если это особенность API)
-            logger.warning(f"⚠️ payment_method.saved=False, но id есть. Пробуем включить автопродление в любом случае...")
-            await set_auto_renewal(tg_user_id, True)
-            logger.info(f"✅ Автопродление включено для пользователя {tg_user_id} (несмотря на saved=False)")
     else:
-        logger.warning(f"⚠️ Платеж {payment_id}: payment_method_id отсутствует - автопродление НЕ будет включено!")
+        if not payment_method_id:
+            logger.info(f"ℹ️ Платеж {payment_id}: payment_method_id отсутствует - автопродление НЕ будет включено")
+        elif not payment_method_saved:
+            logger.info(f"ℹ️ Платеж {payment_id}: payment_method не сохранен пользователем (saved=False) - автопродление НЕ будет включено")
+        elif payment_method_type and payment_method_type.lower() not in ['bank_card', 'card']:
+            logger.info(f"ℹ️ Платеж {payment_id}: тип платежного метода {payment_method_type} не поддерживает автопродление")
     
     # Обновляем статус платежа в БД
     await update_payment_status_async(payment_id, "succeeded")
