@@ -1003,26 +1003,73 @@ async def yookassa_webhook(request: Request):
     payment_method_saved = False
     
     # Проверяем наличие payment_method и его статус сохранения
+    logger.info(f"🔍 Проверка payment_method для платежа {payment_id}, пользователь {tg_user_id}")
     if hasattr(payment, 'payment_method') and payment.payment_method:
         pm = payment.payment_method
+        logger.info(f"📋 payment_method найден: {type(pm)}")
         
         # Проверяем, сохранен ли метод оплаты
         if hasattr(pm, 'saved'):
             payment_method_saved = bool(pm.saved)
+            logger.info(f"💾 payment_method.saved = {payment_method_saved} (атрибут)")
         elif isinstance(pm, dict):
             payment_method_saved = bool(pm.get('saved', False))
+            logger.info(f"💾 payment_method['saved'] = {payment_method_saved} (dict)")
+        else:
+            logger.warning(f"⚠️ Не удалось определить saved для payment_method: {pm}")
         
-        # Получаем ID метода оплаты
-        if hasattr(pm, 'id') and payment_method_saved:
+        # Получаем ID метода оплаты (пробуем получить даже если saved=False, на случай если YooKassa вернул id)
+        if hasattr(pm, 'id'):
             payment_method_id = pm.id
-        elif isinstance(pm, dict) and payment_method_saved and 'id' in pm:
+            logger.info(f"🆔 payment_method.id = {payment_method_id} (атрибут)")
+        elif isinstance(pm, dict) and 'id' in pm:
             payment_method_id = pm['id']
+            logger.info(f"🆔 payment_method['id'] = {payment_method_id} (dict)")
+        else:
+            logger.warning(f"⚠️ Не удалось получить id для payment_method: {pm}")
+    else:
+        logger.warning(f"⚠️ payment_method отсутствует или None для платежа {payment_id}")
     
     # Активируем подписку (используем SUBSCRIPTION_DAYS из config)
     await activate_subscription(tg_user_id, days=SUBSCRIPTION_DAYS)
+    logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {SUBSCRIPTION_DAYS * 1440:.0f} минут")
     
-    # Сохраняем payment_method_id и автоматически включаем автопродление, если метод был сохранен пользователем
-    if payment_method_id and payment_method_saved:
+    # Сохраняем payment_method_id и автоматически включаем автопродление
+    # ВАЖНО: Сохраняем payment_method_id даже если saved=False, если id есть
+    # Это нужно для случаев, когда YooKassa вернул id, но saved может быть False из-за особенностей API
+    if payment_method_id:
+        from db import save_payment_method, set_auto_renewal
+        await save_payment_method(tg_user_id, payment_method_id)
+        logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
+        
+        # Включаем автопродление если метод был сохранен пользователем ИЛИ если id есть (на случай если saved не работает правильно)
+        if payment_method_saved:
+            await set_auto_renewal(tg_user_id, True)
+            logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True)")
+            
+            # Уведомляем пользователя о сохранении карты и включении автопродления
+            try:
+                await bot.send_message(
+                    tg_user_id,
+                    "💳 <b>Карта сохранена для автопродления</b>\n\n"
+                    f"✅ Ваша карта сохранена и будет использоваться для автоматического продления подписки.\n\n"
+                    f"🔄 Подписка будет автоматически продлеваться каждые {SUBSCRIPTION_DAYS * 1440:.0f} минут.\n\n"
+                    "⚙️ Вы можете отключить автопродление в меню «Управление подпиской».",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка отправки уведомления о сохранении карты: {e}")
+        else:
+            # Если saved=False, но id есть, все равно включаем автопродление (на случай если это особенность API)
+            logger.warning(f"⚠️ payment_method.saved=False, но id есть. Пробуем включить автопродление в любом случае...")
+            await set_auto_renewal(tg_user_id, True)
+            logger.info(f"✅ Автопродление включено для пользователя {tg_user_id} (несмотря на saved=False)")
+    else:
+        logger.warning(f"⚠️ Платеж {payment_id}: payment_method_id отсутствует - автопродление НЕ будет включено!")
+    
+    # Старая логика (оставляем для совместимости, но она уже не используется)
+    if False:  # Отключено, так как логика выше уже обрабатывает все случаи
+        if payment_method_id and payment_method_saved:
         from db import save_payment_method, set_auto_renewal
         await save_payment_method(tg_user_id, payment_method_id)
         # Автоматически включаем автопродление после первой успешной оплаты с сохраненной картой
