@@ -689,35 +689,20 @@ async def check_expired_subscriptions():
                                     processed_users[notification_sent_key] = datetime.utcnow()
                                     logger.info(f"📧 Отправлено уведомление об отключении автопродления пользователю {telegram_id}")
                             else:
-                                # Создаем новую ссылку на оплату для продления
-                                from payments import create_payment
+                                # Отправляем уведомление об истечении подписки (только один раз)
+                                notification_sent_key = f"subscription_expired_notification_{telegram_id}"
+                                notification_sent_time = processed_users.get(notification_sent_key)
                                 
-                                RETURN_URL_WEBHOOK = f"https://t.me/{os.getenv('BOT_USERNAME', 'xasanimbot')}"
-                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                                
-                                # create_payment - синхронная функция
-                                payment_id, pay_url = create_payment(
-                                    amount_rub=PAYMENT_AMOUNT_RUB,
-                                    description=f"Продление подписки на канал ({SUBSCRIPTION_DAYS * 1440:.0f} минут)",
-                                    return_url=RETURN_URL_WEBHOOK,
-                                    customer_email=CUSTOMER_EMAIL,
-                                    telegram_user_id=telegram_id,
-                                )
-                                
-                                # Сохраняем платеж
-                                from db import save_payment
-                                await save_payment(telegram_id, payment_id, status="pending")
-                                
-                                # Отправляем уведомление
-                                await bot.send_message(
-                                    telegram_id,
-                                    "⏰ Ваша подписка истекла\n\n"
-                                    "Для продления подписки перейдите по ссылке:\n"
-                                    f"{pay_url}\n\n"
-                                    "После оплаты вернитесь в бота и нажмите: 🔍 Проверить оплату"
-                                )
-                                
-                                logger.info(f"✅ Отправлена ссылка на продление подписки пользователю {telegram_id}")
+                                # Отправляем уведомление только если не отправляли или прошло больше 24 часов
+                                if not notification_sent_time or (datetime.utcnow() - notification_sent_time).total_seconds() > 86400:
+                                    await bot.send_message(
+                                        telegram_id,
+                                        "⏰ <b>Ваша подписка истекла</b>\n\n"
+                                        "Для продления подписки нажмите кнопку 💳 Оплатить подписку.",
+                                        parse_mode="HTML"
+                                    )
+                                    processed_users[notification_sent_key] = datetime.utcnow()
+                                    logger.info(f"📧 Отправлено уведомление об истечении подписки пользователю {telegram_id}")
                         
                         # Добавляем пользователя в processed_users с текущим временем
                         processed_users[telegram_id] = datetime.utcnow()
