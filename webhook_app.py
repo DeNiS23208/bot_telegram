@@ -376,16 +376,21 @@ async def get_expired_subscriptions():
     """Получает список подписок, которые истекли"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
         now = datetime.utcnow()
-        # Подписки, которые уже истекли
+        now_iso = now.isoformat()
+        # Подписки, которые уже истекли (проверяем с небольшим запасом для точности)
         cursor = await db_conn.execute(
             """
             SELECT telegram_id, expires_at, auto_renewal_enabled, saved_payment_method_id
             FROM subscriptions 
-            WHERE expires_at <= ?
+            WHERE expires_at IS NOT NULL 
+            AND expires_at <= ?
             """,
-            (now.isoformat(),)
+            (now_iso,)
         )
         rows = await cursor.fetchall()
+        logger.debug(f"🔍 get_expired_subscriptions: найдено {len(rows)} истекших подписок (now={now_iso})")
+        for row in rows:
+            logger.debug(f"  - Пользователь {row[0]}: expires_at={row[1]}, auto_renewal={row[2]}, saved_method={bool(row[3]) if row[3] else False}")
         return rows
 
 
@@ -518,18 +523,25 @@ async def check_expired_subscriptions():
             # Проверяем подписки, которые истекли
             expired_subs = await get_expired_subscriptions()
             
+            logger.info(f"🔍 Проверка истекших подписок: найдено {len(expired_subs)} подписок")
+            
             for row in expired_subs:
                 telegram_id = row[0]
                 expires_at_str = row[1]
                 auto_renewal_enabled = bool(row[2]) if len(row) > 2 else False
                 saved_payment_method_id = row[3] if len(row) > 3 and row[3] else None
                 
+                logger.info(f"📋 Обработка подписки пользователя {telegram_id}: expires_at={expires_at_str}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
+                
                 if telegram_id in processed_users:
+                    logger.info(f"⏭️ Пользователь {telegram_id} уже обработан, пропускаем")
                     continue
                     
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
                     now = datetime.utcnow()
+                    
+                    logger.info(f"⏰ Пользователь {telegram_id}: expires_at={expires_at}, now={now}, разница={(now - expires_at).total_seconds()} секунд")
                     
                     # Если подписка уже истекла
                     if expires_at <= now:
@@ -605,6 +617,7 @@ async def check_expired_subscriptions():
                         
                         # Если автопродление не включено или не удалось, баним и отправляем ссылку на оплату
                         if not auto_renewal_enabled or not saved_payment_method_id or auto_payment_failed:
+                            logger.info(f"🚫 Автопродление не работает для пользователя {telegram_id}: auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}, failed={auto_payment_failed}")
                             # Отзываем ссылку пользователя (делаем её невалидной)
                             from db import get_invite_link
                             user_invite_link = await get_invite_link(telegram_id)

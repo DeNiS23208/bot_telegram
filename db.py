@@ -133,12 +133,14 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> tuple[
         )
 
         # upsert подписки (сохраняем дату начала и окончания)
-        # Если автопродление включено, не обновляем его статус
+        # ВАЖНО: При обновлении сохраняем auto_renewal_enabled и saved_payment_method_id
         await db.execute(
             """
             INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
             VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
-            UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at
+            UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at,
+                       auto_renewal_enabled=COALESCE(subscriptions.auto_renewal_enabled, 0),
+                       saved_payment_method_id=COALESCE(subscriptions.saved_payment_method_id, NULL)
             """,
             (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
