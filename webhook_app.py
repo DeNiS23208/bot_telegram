@@ -1018,20 +1018,28 @@ async def yookassa_webhook(request: Request):
     except Exception:
         pass  # Игнорируем ошибки разбана
 
+    # Получаем дату окончания подписки для установки expire_date ссылки
+    from db import get_subscription_expires_at
+    subscription_expires_at = await get_subscription_expires_at(tg_user_id)
+    
     # Создаем ПРИГЛАСИТЕЛЬНУЮ ссылку (прямой доступ) - пользователь заплатил!
-    # Пробуем несколько вариантов для максимальной совместимости
+    # Ссылка будет одноразовой (member_limit=1) и действительна до окончания подписки
     invite_link = None
     try:
+        # Используем expires_at подписки как expire_date ссылки
+        # Если подписка истекает через 30 дней, ссылка будет валидна 30 дней
+        link_expire_date = subscription_expires_at if subscription_expires_at else (datetime.utcnow() + timedelta(days=30))
+        
         # Сначала пробуем создать ссылку БЕЗ заявки (если канал поддерживает)
         try:
             invite = await bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
                 creates_join_request=False,  # БЕЗ заявки - прямой доступ
-                member_limit=1,  # Одноразовая ссылка
-                expire_date=datetime.utcnow() + timedelta(hours=24)
+                member_limit=1,  # Одноразовая ссылка - только один пользователь может использовать
+                expire_date=link_expire_date  # Ссылка действительна до окончания подписки
             )
             invite_link = invite.invite_link
-            logger.info(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (без заявки) для пользователя {tg_user_id}")
+            logger.info(f"✅ Создана одноразовая ссылка (без заявки) для пользователя {tg_user_id}, действительна до {link_expire_date}")
         except Exception as e1:
             # Если не получилось, пробуем без параметра creates_join_request (по умолчанию)
             logger.warning(f"⚠️ Первая попытка создания ссылки не удалась: {e1}, пробуем второй вариант")
@@ -1039,10 +1047,10 @@ async def yookassa_webhook(request: Request):
                 invite = await bot.create_chat_invite_link(
                     chat_id=CHANNEL_ID,
                     member_limit=1,  # Одноразовая ссылка
-                    expire_date=datetime.utcnow() + timedelta(hours=24)
+                    expire_date=link_expire_date  # Ссылка действительна до окончания подписки
                 )
                 invite_link = invite.invite_link
-                logger.info(f"✅ Создана ПРИГЛАСИТЕЛЬНАЯ ссылка (второй вариант) для пользователя {tg_user_id}")
+                logger.info(f"✅ Создана одноразовая ссылка (второй вариант) для пользователя {tg_user_id}, действительна до {link_expire_date}")
             except Exception as e2:
                 # Если и это не получилось, пробуем основную ссылку канала
                 logger.warning(f"⚠️ Вторая попытка не удалась: {e2}, пробуем основную ссылку канала")
