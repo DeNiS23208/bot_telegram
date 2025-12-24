@@ -787,7 +787,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         # Используем невидимый символ или минимальный текст
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
-            text="\u200B",  # Невидимый символ (zero-width space) - требуется Telegram API
+            text=".",  # Минимальный текст - требуется Telegram API
             reply_markup=keyboard
         )
         
