@@ -783,9 +783,10 @@ async def cmd_send_miniapp_to_channel(message: Message):
         )
         
         # Отправляем сообщение с кнопкой в канал
+        # Telegram требует, чтобы сообщение имело текст, даже если есть кнопка
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
-            text="",  # Пустое сообщение или можно добавить текст
+            text=" ",  # Минимальный текст (пробел) - требуется Telegram API
             reply_markup=keyboard
         )
         
