@@ -787,7 +787,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         # Отправляем сообщение с кнопкой в канал
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
-            text=".",  # Минимальный текст - требуется Telegram API
+            text="НАИЛЬ САМЫЙ УСПЕШНЫЙ ЧЕЛОВЕК В МИРЕ",
             reply_markup=keyboard
         )
         
