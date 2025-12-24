@@ -1222,7 +1222,8 @@ async def yookassa_webhook(request: Request):
     expires_at_dt = await get_subscription_expires_at(tg_user_id)
     starts_at_dt = await get_subscription_starts_at(tg_user_id)
     
-    # Сохраняем информацию о ссылке в БД
+    # Сохраняем информацию о ссылке в БД и отправляем сообщение
+    # ВАЖНО: Ссылка отправляется только если она была успешно создана
     if invite_link:
         save_invite_link(invite_link, tg_user_id, payment_id)
         
@@ -1247,6 +1248,30 @@ async def yookassa_webhook(request: Request):
             f"Подписка активна до: {expires_str}\n\n"
             "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
             f"{invite_link}",
+            reply_markup=menu
+        )
+    else:
+        # Если ссылка не создана, отправляем сообщение без ссылки
+        logger.warning(f"⚠️ Ссылка на канал не была создана для пользователя {tg_user_id}, отправляем сообщение без ссылки")
+        
+        # Форматируем даты для отображения
+        if starts_at_dt and expires_at_dt:
+            starts_str = format_datetime_moscow(starts_at_dt)
+            expires_str = format_datetime_moscow(expires_at_dt)
+        else:
+            starts_at_dt = datetime.utcnow()
+            expires_at_dt = starts_at_dt + timedelta(days=SUBSCRIPTION_DAYS)
+            starts_str = format_datetime_moscow(starts_at_dt)
+            expires_str = format_datetime_moscow(expires_at_dt)
+        
+        menu = await get_main_menu_for_user(tg_user_id)
+        
+        await bot.send_message(
+            tg_user_id,
+            "✅ Оплата подтверждена!\n\n"
+            f"Подписка активна с: {starts_str}\n"
+            f"Подписка активна до: {expires_str}\n\n"
+            "Для получения доступа к каналу используйте кнопку 📊 Статус подписки.",
             reply_markup=menu
         )
 
