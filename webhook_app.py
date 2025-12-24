@@ -1066,10 +1066,6 @@ async def yookassa_webhook(request: Request):
             logger.info(f"✅ Автопродление включено для пользователя {tg_user_id} (несмотря на saved=False)")
     else:
         logger.warning(f"⚠️ Платеж {payment_id}: payment_method_id отсутствует - автопродление НЕ будет включено!")
-    
-    # Старая логика (оставляем для совместимости, но она уже не используется)
-    if False:  # Отключено, так как логика выше уже обрабатывает все случаи
-        if payment_method_id and payment_method_saved:
         from db import save_payment_method, set_auto_renewal
         await save_payment_method(tg_user_id, payment_method_id)
         # Автоматически включаем автопродление после первой успешной оплаты с сохраненной картой
