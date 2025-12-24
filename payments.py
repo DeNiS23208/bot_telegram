@@ -43,6 +43,9 @@ def create_payment(
 
         # ✅ КРИТИЧНО: это нужно webhook'у
         "metadata": {"telegram_user_id": str(telegram_user_id)},
+        
+        # ✅ ВАЖНО: merchant_customer_id нужен для сохранения способа оплаты
+        "merchant_customer_id": str(telegram_user_id),
 
         "receipt": {
             "customer": {"email": customer_email},
@@ -119,6 +122,9 @@ def create_auto_payment(
         
         # ✅ КРИТИЧНО: это нужно webhook'у
         "metadata": {"telegram_user_id": str(telegram_user_id), "auto_renewal": "true"},
+        
+        # ✅ ВАЖНО: merchant_customer_id нужен для автоплатежей
+        "merchant_customer_id": str(telegram_user_id),
         
         "receipt": {
             "customer": {"email": customer_email},
