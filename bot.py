@@ -6,7 +6,7 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, ContentType, WebAppInfo
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile, BufferedInputFile, ContentType
 from aiogram.enums import ChatAction
 from dotenv import load_dotenv
 
@@ -749,9 +749,9 @@ async def send_channel_link(message: Message):
             )
 
 
-@dp.message(Command("send_miniapp_to_channel"))
-async def cmd_send_miniapp_to_channel(message: Message):
-    """Команда для отправки кнопки НАВИГАЦИЯ (mini app) в канал"""
+@dp.message(Command("send_button_to_channel"))
+async def cmd_send_button_to_channel(message: Message):
+    """Команда для отправки кнопки в канал"""
     if not CHANNEL_ID:
         await message.answer(
             "❌ <b>Ошибка</b>\n\n"
@@ -760,26 +760,23 @@ async def cmd_send_miniapp_to_channel(message: Message):
         )
         return
     
-    mini_app_url = os.getenv("MINI_APP_URL", None)
+    button_url = os.getenv("MINI_APP_URL", None)
     
-    if not mini_app_url:
+    if not button_url:
         await message.answer(
             "❌ <b>Ошибка</b>\n\n"
-            "MINI_APP_URL не настроен в .env файле.\n\n"
-            "Добавьте MINI_APP_URL=https://t.me/xasanimbot/miniapp в .env файл.",
+            "URL кнопки не настроен в .env файле.",
             parse_mode="HTML"
         )
         return
     
     try:
-        # Для каналов используем обычную URL кнопку вместо WebApp
-        # WebApp кнопки могут не поддерживаться в каналах
-        # URL кнопка откроет mini app в браузере/приложении Telegram
+        # Для каналов используем обычную URL кнопку
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
                     text="не навигация",
-                    url=mini_app_url  # Используем url вместо web_app
+                    url=button_url
                 )
             ]]
         )
@@ -793,7 +790,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         
         await message.answer(
             "✅ <b>Успешно!</b>\n\n"
-            f"Кнопка НАВИГАЦИЯ отправлена в канал.\n\n"
+            f"Кнопка отправлена в канал.\n\n"
             f"Теперь закрепите это сообщение в канале.",
             parse_mode="HTML"
         )
@@ -807,7 +804,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
             "• Бот имеет права на отправку сообщений",
             parse_mode="HTML"
         )
-        print(f"❌ Ошибка отправки mini app в канал: {e}")
+        print(f"❌ Ошибка отправки кнопки в канал: {e}")
 
 
 # Обработчик для кнопки "Управление подпиской"
