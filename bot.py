@@ -773,18 +773,20 @@ async def cmd_send_miniapp_to_channel(message: Message):
     
     try:
         # Создаем кнопку с WebApp для открытия mini app
+        # Важно: WebAppInfo должен быть создан правильно
+        web_app_info = WebAppInfo(url=mini_app_url)
+        
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
                     text="НАВИГАЦИЯ",
-                    web_app=WebAppInfo(url=mini_app_url)
+                    web_app=web_app_info
                 )
             ]]
         )
         
         # Отправляем сообщение с кнопкой в канал
-        # Telegram требует, чтобы сообщение имело непустой текст, даже если есть кнопка
-        # Используем невидимый символ или минимальный текст
+        # Telegram требует, чтобы сообщение имело непустой текст
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
             text=".",  # Минимальный текст - требуется Telegram API
