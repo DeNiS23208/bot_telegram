@@ -545,7 +545,7 @@ async def check_expired_subscriptions():
                                 # Создаем автоматический платеж
                                 payment_id, payment_status = create_auto_payment(
                                     amount_rub=PAYMENT_AMOUNT_RUB,
-                                    description=f"Автопродление подписки на канал ({SUBSCRIPTION_DAYS} дней)",
+                                    description=f"Автопродление подписки на канал ({SUBSCRIPTION_DAYS * 1440:.0f} минут)",
                                     customer_email=CUSTOMER_EMAIL,
                                     telegram_user_id=telegram_id,
                                     payment_method_id=saved_payment_method_id,
@@ -573,7 +573,7 @@ async def check_expired_subscriptions():
                                         telegram_id,
                                         "✅ Подписка автоматически продлена!\n\n"
                                         f"С вашей карты списано {PAYMENT_AMOUNT_RUB} руб.\n"
-                                        f"Подписка продлена на {SUBSCRIPTION_DAYS} дней.\n\n"
+                                        f"Подписка продлена на {SUBSCRIPTION_DAYS * 1440:.0f} минут.\n\n"
                                         "Спасибо за использование автопродления!"
                                     )
                                     logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}")
@@ -620,7 +620,7 @@ async def check_expired_subscriptions():
                             # create_payment - синхронная функция
                             payment_id, pay_url = create_payment(
                                 amount_rub=PAYMENT_AMOUNT_RUB,
-                                description=f"Продление подписки на канал ({SUBSCRIPTION_DAYS} дней)",
+                                description=f"Продление подписки на канал ({SUBSCRIPTION_DAYS * 1440:.0f} минут)",
                                 return_url=RETURN_URL_WEBHOOK,
                                 customer_email=CUSTOMER_EMAIL,
                                 telegram_user_id=telegram_id,
@@ -985,8 +985,8 @@ async def yookassa_webhook(request: Request):
         elif isinstance(pm, dict) and payment_method_saved and 'id' in pm:
             payment_method_id = pm['id']
     
-    # Активируем подписку на 30 дней (starts_at, expires_at уже сохранены в activate_subscription)
-    await activate_subscription(tg_user_id, days=30)
+    # Активируем подписку (используем SUBSCRIPTION_DAYS из config)
+    await activate_subscription(tg_user_id, days=SUBSCRIPTION_DAYS)
     
     # Сохраняем payment_method_id и автоматически включаем автопродление, если метод был сохранен пользователем
     if payment_method_id and payment_method_saved:
