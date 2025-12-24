@@ -720,13 +720,20 @@ async def send_channel_link(message: Message):
             from aiogram import Bot
             bot_instance = Bot(token=TOKEN)
             
-            # Пытаемся создать новую ссылку
+            # Пытаемся создать новую одноразовую ссылку, действительную до окончания подписки
             invite = await bot_instance.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
-                member_limit=1,
-                expire_date=expires_at
+                member_limit=1,  # Одноразовая ссылка - только один пользователь может использовать
+                expire_date=expires_at  # Ссылка действительна до окончания подписки
             )
             invite_link = invite.invite_link
+            
+            # Сохраняем ссылку в БД
+            from webhook_app import save_invite_link
+            from db import get_latest_payment_id
+            payment_id = await get_latest_payment_id(user_id)
+            if payment_id:
+                save_invite_link(invite_link, user_id, payment_id)
             
             expires_str = format_datetime_moscow(expires_at)
             await message.answer(

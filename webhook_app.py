@@ -593,6 +593,13 @@ async def check_expired_subscriptions():
                         
                         # Если автопродление не включено или не удалось, отправляем ссылку на оплату
                         if not auto_renewal_enabled or not saved_payment_method_id:
+                            # Отзываем ссылку пользователя (делаем её невалидной)
+                            from db import get_invite_link
+                            user_invite_link = await get_invite_link(telegram_id)
+                            if user_invite_link:
+                                revoke_invite_link(user_invite_link)
+                                logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за истечения подписки")
+                            
                             # Баним пользователя в канале (удаляем из канала)
                             try:
                                 await bot.ban_chat_member(
