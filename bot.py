@@ -113,8 +113,9 @@ async def manage_subscription_menu(telegram_id: int) -> ReplyKeyboardMarkup:
     # Проверяем статус автопродления
     auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
     
-    # Если автопродление включено - показываем "Отменить подписку", иначе "Возобновить подписку"
-    action_button = BTN_CANCEL_SUB if auto_renewal_enabled else BTN_RESUME_SUB
+    # ВРЕМЕННО: для скриншота всегда показываем "Отменить подписку"
+    # Если автопродление включено - показываем "Отменить подписку", иначе тоже "Отменить подписку" (для теста)
+    action_button = BTN_CANCEL_SUB  # Всегда показываем "Отменить подписку" для скриншота
     
     keyboard = [
         [KeyboardButton(text=action_button)],
