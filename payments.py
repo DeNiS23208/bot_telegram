@@ -137,9 +137,15 @@ def create_auto_payment(
     
     try:
         payment = Payment.create(payload, idempotence_key)
+        # Логируем детали для отладки
+        print(f"🔍 Создан автоплатеж: payment_id={payment.id}, status={payment.status}, payment_method_id={payment_method_id}")
+        if hasattr(payment, 'cancellation_details') and payment.cancellation_details:
+            print(f"⚠️ Детали отмены: {payment.cancellation_details}")
         return payment.id, payment.status
     except Exception as e:
         # Логируем ошибку для отладки
         print(f"❌ Ошибка создания автоматического платежа: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 

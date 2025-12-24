@@ -1019,12 +1019,25 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Не удалось определить saved для payment_method: {pm}")
         
         # Получаем ID метода оплаты (пробуем получить даже если saved=False, на случай если YooKassa вернул id)
+        # ВАЖНО: payment_method.id может быть равен payment.id для первого платежа
+        # Но для автоплатежей нужен ID сохраненного способа оплаты
         if hasattr(pm, 'id'):
             payment_method_id = pm.id
             logger.info(f"🆔 payment_method.id = {payment_method_id} (атрибут)")
+            # Проверяем, не равен ли он payment.id (это может быть проблемой)
+            if payment_method_id == payment_id:
+                logger.warning(f"⚠️ ВНИМАНИЕ: payment_method.id ({payment_method_id}) равен payment.id! Это может быть проблемой для автоплатежей.")
+                # Пробуем получить ID из других полей
+                if hasattr(pm, 'card') and hasattr(pm.card, 'last4'):
+                    logger.info(f"💳 Информация о карте: последние 4 цифры: {pm.card.last4}")
+                # Для первого платежа payment_method.id может быть равен payment.id
+                # Но YooKassa должен вернуть правильный ID для последующих автоплатежей
+                # Пока используем этот ID, но добавим предупреждение
         elif isinstance(pm, dict) and 'id' in pm:
             payment_method_id = pm['id']
             logger.info(f"🆔 payment_method['id'] = {payment_method_id} (dict)")
+            if payment_method_id == payment_id:
+                logger.warning(f"⚠️ ВНИМАНИЕ: payment_method['id'] ({payment_method_id}) равен payment.id! Это может быть проблемой для автоплатежей.")
         else:
             logger.warning(f"⚠️ Не удалось получить id для payment_method: {pm}")
     else:
