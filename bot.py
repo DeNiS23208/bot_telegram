@@ -786,6 +786,60 @@ async def cmd_miniapp(message: Message):
         )
 
 
+@dp.message(Command("send_miniapp_to_channel"))
+async def cmd_send_miniapp_to_channel(message: Message):
+    """Команда для отправки ссылки на mini app в канал (только для администраторов)"""
+    if not CHANNEL_ID:
+        await message.answer(
+            "❌ <b>Ошибка</b>\n\n"
+            "CHANNEL_ID не настроен в .env файле.",
+            parse_mode="HTML"
+        )
+        return
+    
+    mini_app_url = os.getenv("MINI_APP_URL", None)
+    
+    if not mini_app_url:
+        await message.answer(
+            "❌ <b>Ошибка</b>\n\n"
+            "MINI_APP_URL не настроен в .env файле.\n\n"
+            "Добавьте MINI_APP_URL=https://t.me/xasanimbot/miniapp в .env файл.",
+            parse_mode="HTML"
+        )
+        return
+    
+    try:
+        # Отправляем ссылку на mini app в канал
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=(
+                "📱 <b>Mini App</b>\n\n"
+                f"Откройте наше приложение:\n\n"
+                f"{mini_app_url}"
+            ),
+            parse_mode="HTML"
+        )
+        
+        await message.answer(
+            "✅ <b>Успешно!</b>\n\n"
+            f"Ссылка на mini app отправлена в канал:\n"
+            f"<code>{CHANNEL_ID}</code>\n\n"
+            f"Ссылка: {mini_app_url}",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ <b>Ошибка отправки в канал</b>\n\n"
+            f"Ошибка: {str(e)}\n\n"
+            "Проверьте:\n"
+            "• Бот добавлен как администратор в канал\n"
+            "• CHANNEL_ID указан правильно\n"
+            "• Бот имеет права на отправку сообщений",
+            parse_mode="HTML"
+        )
+        print(f"❌ Ошибка отправки mini app в канал: {e}")
+
+
 # Обработчик для кнопки "Управление подпиской"
 @dp.message(lambda m: (m.text or "").strip() == BTN_MANAGE_SUB)
 async def manage_subscription(message: Message):
