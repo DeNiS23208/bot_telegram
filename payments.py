@@ -59,11 +59,12 @@ def create_payment(
         },
     }
     
-    # Пытаемся включить сохранение способа оплаты, если запрошено
+    # Пытаемся включить условное сохранение способа оплаты, если запрошено
     # ВАЖНО: это работает только если магазин настроен для автоплатежей в ЮKassa
     # Если магазин не настроен, этот параметр вызовет ошибку ForbiddenError
+    # save_payment_method: true - это условное сохранение (пользователь может выбрать на форме оплаты)
     if enable_save_payment_method:
-        payload["save_payment_method"] = True
+        payload["save_payment_method"] = True  # Условное сохранение - пользователь выбирает на форме оплаты
 
     try:
         payment = Payment.create(payload, idempotence_key)
