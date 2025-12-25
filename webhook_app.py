@@ -56,7 +56,7 @@ Configuration.secret_key = YOOKASSA_SECRET_KEY
 app = FastAPI()
 bot = Bot(token=BOT_TOKEN)
 
-    # Запускаем фоновые задачи для проверки истекших платежей и подписок
+# Запускаем фоновые задачи для проверки истекших платежей и подписок
 @app.on_event("startup")
 async def startup_event():
     """Запускаем фоновые задачи при старте приложения"""
@@ -570,7 +570,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                        continue
+                    continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
@@ -598,7 +598,7 @@ async def check_expired_subscriptions():
                                 # Создаем автоматический платеж
                                 payment_id, payment_status = create_auto_payment(
                                     amount_rub=PAYMENT_AMOUNT_RUB,
-                                    description=f"Автопродление подписки на канал ({SUBSCRIPTION_DAYS * 1440:.0f} минут)",
+                                    description=f"Автопродление доступа на канал ({SUBSCRIPTION_DAYS * 1440:.0f} минут)",
                                     customer_email=CUSTOMER_EMAIL,
                                     telegram_user_id=telegram_id,
                                     payment_method_id=saved_payment_method_id,
@@ -687,15 +687,15 @@ async def check_expired_subscriptions():
                                 revoke_invite_link(user_invite_link)
                                 logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за истечения подписки")
                             
-                            # Баним пользователя в канале (удаляем из канала)
-                            try:
-                                await bot.ban_chat_member(
-                                    chat_id=CHANNEL_ID,
-                                    user_id=telegram_id,
-                                    until_date=None  # Бан навсегда (пока не оплатит снова)
-                                )
+                        # Баним пользователя в канале (удаляем из канала)
+                        try:
+                            await bot.ban_chat_member(
+                                chat_id=CHANNEL_ID,
+                                user_id=telegram_id,
+                                until_date=None  # Бан навсегда (пока не оплатит снова)
+                            )
                                 logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за истечения подписки")
-                            except Exception as ban_error:
+                        except Exception as ban_error:
                                 logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
                             
                             # Если автоплатеж не удался, отправляем специальное сообщение (только один раз)
@@ -722,8 +722,8 @@ async def check_expired_subscriptions():
                                 
                                 # Отправляем уведомление только если еще не отправляли
                                 if not already_notified:
-                                    await bot.send_message(
-                                        telegram_id,
+                        await bot.send_message(
+                            telegram_id,
                                         "⏰ <b>Ваш доступ истек</b>\n\n"
                                         "Для продления доступа нажмите кнопку 💳 Получить доступ.",
                                         parse_mode="HTML"
@@ -837,10 +837,10 @@ async def yookassa_webhook(request: Request):
                             )
                         # Проверяем, отменил ли пользователь сам (выход из формы) - ПРИОРИТЕТ 2
                         elif 'user' in party:
-                            cancellation_reason = "отменен пользователем (выход из формы)"
-                            message_text = (
-                                "❌ Платёж был отменён\n\n"
-                                "Вы вышли из формы оплаты без завершения платежа.\n\n"
+                                cancellation_reason = "отменен пользователем (выход из формы)"
+                                message_text = (
+                                    "❌ Платёж был отменён\n\n"
+                                    "Вы вышли из формы оплаты без завершения платежа.\n\n"
                                 "Для оплаты нажмите кнопку 💳 Получить доступ и перейдите по новой ссылке."
                             )
                         elif any(keyword in reason for keyword in ['canceled_by_user', 'user_canceled']):
@@ -892,7 +892,7 @@ async def yookassa_webhook(request: Request):
                         logger.info(f"✅ Отправлено уведомление об отмене платежа пользователю {tg_user_id}, причина: {cancellation_reason}")
                     except Exception as e:
                         logger.error(f"❌ Ошибка отправки уведомления об отмене платежа пользователю {tg_user_id}: {e}")
-                else:
+            else:
                     # Если message_text пустое или None - отправляем стандартное уведомление
                     try:
                         await bot.send_message(
@@ -902,7 +902,7 @@ async def yookassa_webhook(request: Request):
                             "Для оплаты нажмите кнопку 💳 Получить доступ и перейдите по новой ссылке."
                         )
                         logger.info(f"✅ Отправлено стандартное уведомление об отмене платежа пользователю {tg_user_id}")
-                    except Exception as e:
+        except Exception as e:
                         logger.error(f"❌ Ошибка отправки уведомления об отмене платежа пользователю {tg_user_id}: {e}")
             else:
                 logger.warning(f"⚠️ Нет telegram_user_id в метаданных платежа {payment_id}")
@@ -970,7 +970,7 @@ async def yookassa_webhook(request: Request):
                             f"💰 Возврат средств выполнен\n\n"
                             f"Сумма возврата: {amount} {currency}\n"
                             f"ID платежа: {payment_id_refund}\n\n"
-                            f"Ваша подписка была отменена.\n"
+                            f"Ваш доступ был отменен.\n"
                             f"Деньги будут возвращены на карту в течение нескольких рабочих дней."
                         )
                         logger.info(f"✅ Отправлено уведомление о возврате пользователю {tg_user_id}")
@@ -1136,12 +1136,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (только банковские карты)")
             payment_method_id = None  # Не сохраняем для не-карт
         else:
-            from db import save_payment_method, set_auto_renewal
-            await save_payment_method(tg_user_id, payment_method_id)
+        from db import save_payment_method, set_auto_renewal
+        await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
             
             # Включаем автопродление только если карта сохранена
-            await set_auto_renewal(tg_user_id, True)
+        await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True)")
             
             # Уведомляем пользователя о сохранении карты и включении автопродления
@@ -1180,7 +1180,7 @@ async def yookassa_webhook(request: Request):
     # Получаем дату окончания подписки для установки expire_date ссылки
     from db import get_subscription_expires_at
     subscription_expires_at = await get_subscription_expires_at(tg_user_id)
-    
+
     # Создаем ПРИГЛАСИТЕЛЬНУЮ ссылку (прямой доступ) - пользователь заплатил!
     # Ссылка будет одноразовой (member_limit=1) и действительна до окончания подписки
     invite_link = None
