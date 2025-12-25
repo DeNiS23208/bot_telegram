@@ -43,6 +43,10 @@ async def init_db() -> None:
                              0,
                              saved_payment_method_id
                              TEXT,
+                             subscription_expired_notified
+                             INTEGER
+                             DEFAULT
+                             0,
                              FOREIGN
                              KEY
                          (
@@ -53,6 +57,12 @@ async def init_db() -> None:
                          )
                              )
                          """)
+        # Добавляем колонку subscription_expired_notified, если её нет (для существующих БД)
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN subscription_expired_notified INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass  # Колонка уже существует
         await db.execute("""
                          CREATE TABLE IF NOT EXISTS payments
                          (
@@ -134,13 +144,15 @@ async def activate_subscription_days(telegram_id: int, days: int = 30) -> tuple[
 
         # upsert подписки (сохраняем дату начала и окончания)
         # ВАЖНО: При обновлении сохраняем auto_renewal_enabled и saved_payment_method_id
+        # При активации новой подписки сбрасываем флаг subscription_expired_notified
         await db.execute(
             """
-            INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
-            VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
+            INSERT INTO subscriptions (telegram_id, expires_at, starts_at, subscription_expired_notified)
+            VALUES (?, ?, ?, 0) ON CONFLICT(telegram_id) DO
             UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at,
                        auto_renewal_enabled=COALESCE(subscriptions.auto_renewal_enabled, 0),
-                       saved_payment_method_id=COALESCE(subscriptions.saved_payment_method_id, NULL)
+                       saved_payment_method_id=COALESCE(subscriptions.saved_payment_method_id, NULL),
+                       subscription_expired_notified=0
             """,
             (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
@@ -324,6 +336,27 @@ async def is_user_allowed(telegram_user_id: int) -> bool:
             return row is not None
     except Exception:
         return False
+
+
+async def set_subscription_expired_notified(telegram_id: int, notified: bool = True) -> None:
+    """Помечает, что уведомление об истечении подписки было отправлено"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE subscriptions SET subscription_expired_notified = ? WHERE telegram_id = ?",
+            (1 if notified else 0, telegram_id)
+        )
+        await db.commit()
+
+
+async def get_subscription_expired_notified(telegram_id: int) -> bool:
+    """Проверяет, было ли отправлено уведомление об истечении подписки"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT subscription_expired_notified FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    return bool(row and row[0]) if row else False
 
 
 async def get_invite_link(telegram_id: int) -> Optional[str]:

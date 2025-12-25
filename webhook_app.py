@@ -195,9 +195,16 @@ def db():
             starts_at TEXT,
             auto_renewal_enabled INTEGER DEFAULT 0,
             saved_payment_method_id TEXT,
+            subscription_expired_notified INTEGER DEFAULT 0,
             FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
         )
     """)
+    # Добавляем колонку subscription_expired_notified, если её нет (для существующих БД)
+    try:
+        conn.execute("ALTER TABLE subscriptions ADD COLUMN subscription_expired_notified INTEGER DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # Колонка уже существует
     conn.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -706,18 +713,24 @@ async def check_expired_subscriptions():
                                     logger.info(f"📧 Отправлено уведомление об отключении автопродления пользователю {telegram_id}")
                             else:
                                 # Отправляем уведомление об истечении подписки (только один раз, больше никогда)
-                                notification_sent_key = f"subscription_expired_notification_{telegram_id}"
+                                # Проверяем в БД, было ли уже отправлено уведомление
+                                from db import get_subscription_expired_notified, set_subscription_expired_notified
+                                
+                                already_notified = await get_subscription_expired_notified(telegram_id)
                                 
                                 # Отправляем уведомление только если еще не отправляли
-                                if notification_sent_key not in processed_users:
+                                if not already_notified:
                                     await bot.send_message(
                                         telegram_id,
                                         "⏰ <b>Ваша подписка истекла</b>\n\n"
                                         "Для продления подписки нажмите кнопку 💳 Оплатить подписку.",
                                         parse_mode="HTML"
                                     )
-                                    processed_users[notification_sent_key] = datetime.utcnow()
-                                    logger.info(f"📧 Отправлено уведомление об истечении подписки пользователю {telegram_id} (один раз)")
+                                    # Помечаем в БД, что уведомление отправлено (навсегда)
+                                    await set_subscription_expired_notified(telegram_id, True)
+                                    logger.info(f"📧 Отправлено уведомление об истечении подписки пользователю {telegram_id} (один раз, сохранено в БД)")
+                                else:
+                                    logger.info(f"⏭️ Уведомление об истечении подписки уже было отправлено пользователю {telegram_id}, пропускаем")
                         
                         # Добавляем пользователя в processed_users с текущим временем
                         processed_users[telegram_id] = datetime.utcnow()
