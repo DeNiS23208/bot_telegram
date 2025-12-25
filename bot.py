@@ -203,14 +203,57 @@ async def cmd_start(message: Message):
                 )
                 print(f"✅ Видео отправлено как документ: {VIDEO_RECORDING_PATH}")
             else:
-                await bot.send_video(
-                    chat_id=message.chat.id,
-                    video=video_file,
-                    caption=welcome_text,
-                    parse_mode="HTML",
-                    supports_streaming=True,
-                    reply_markup=await main_menu(message.from_user.id),
-                )
+                # Пытаемся получить метаданные видео для лучшего отображения
+                width = None
+                height = None
+                duration = None
+                
+                try:
+                    # Пробуем использовать ffprobe для получения метаданных (если установлен)
+                    import subprocess
+                    result = subprocess.run(
+                        ['ffprobe', '-v', 'error', '-select_streams', 'v:0', 
+                         '-show_entries', 'stream=width,height,duration', 
+                         '-of', 'json', VIDEO_RECORDING_PATH],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        import json
+                        data = json.loads(result.stdout)
+                        if 'streams' in data and len(data['streams']) > 0:
+                            stream = data['streams'][0]
+                            width = int(stream.get('width', 0))
+                            height = int(stream.get('height', 0))
+                            duration = float(stream.get('duration', 0))
+                            print(f"📐 Получены метаданные: {width}x{height}, длительность: {duration:.1f}с")
+                except Exception as meta_error:
+                    # Если ffprobe не установлен или произошла ошибка, используем значения по умолчанию
+                    print(f"ℹ️ Не удалось получить метаданные через ffprobe: {meta_error}")
+                    # Для вертикального видео (9:16) используем стандартные размеры
+                    # Это может помочь видео открываться на полный экран в мобильных клиентах
+                    width = 1080
+                    height = 1920
+                
+                # Отправляем видео с метаданными для лучшего отображения
+                video_params = {
+                    "chat_id": message.chat.id,
+                    "video": video_file,
+                    "caption": welcome_text,
+                    "parse_mode": "HTML",
+                    "supports_streaming": True,  # Включаем потоковое воспроизведение
+                    "reply_markup": await main_menu(message.from_user.id),
+                }
+                
+                # Добавляем метаданные, если они доступны
+                if width and height:
+                    video_params["width"] = width
+                    video_params["height"] = height
+                if duration:
+                    video_params["duration"] = int(duration)
+                
+                await bot.send_video(**video_params)
                 print(f"✅ Видео успешно отправлено: {VIDEO_RECORDING_PATH}")
             video_sent = True
             return  # Прерываем выполнение
