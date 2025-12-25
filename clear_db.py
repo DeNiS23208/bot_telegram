@@ -67,6 +67,7 @@ def clear_old_data():
             starts_at TEXT,
             auto_renewal_enabled INTEGER DEFAULT 0,
             saved_payment_method_id TEXT,
+            subscription_expired_notified INTEGER DEFAULT 0,
             FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
         )
     """)

@@ -318,11 +318,13 @@ async def activate_subscription(telegram_id: int, days: int = 30) -> tuple[datet
         )
         
         # upsert подписки (сохраняем дату начала и окончания)
+        # При активации новой подписки сбрасываем флаг subscription_expired_notified
         await db_conn.execute(
             """
-            INSERT INTO subscriptions (telegram_id, expires_at, starts_at)
-            VALUES (?, ?, ?) ON CONFLICT(telegram_id) DO
-            UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at
+            INSERT INTO subscriptions (telegram_id, expires_at, starts_at, subscription_expired_notified)
+            VALUES (?, ?, ?, 0) ON CONFLICT(telegram_id) DO
+            UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at,
+                       subscription_expired_notified=0
             """,
             (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
