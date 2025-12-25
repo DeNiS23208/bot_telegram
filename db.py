@@ -359,6 +359,24 @@ async def get_subscription_expired_notified(telegram_id: int) -> bool:
     return bool(row and row[0]) if row else False
 
 
+async def get_telegram_user_id_by_invite_link(invite_link: str) -> Optional[int]:
+    """
+    Получает telegram_user_id по invite_link
+    Возвращает telegram_user_id или None если ссылка не найдена
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT telegram_user_id FROM invite_links WHERE invite_link = ? AND revoked = 0",
+                (invite_link,)
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row and row[0] else None
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения telegram_user_id по invite_link: {e}")
+        return None
+
+
 async def get_invite_link(telegram_id: int) -> Optional[str]:
     """
     Получает последнюю активную ссылку-приглашение для пользователя

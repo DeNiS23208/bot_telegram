@@ -1092,20 +1092,30 @@ async def on_chat_member_update(update: ChatMemberUpdated):
         invite_link = await get_invite_link(user_id)
         
         if invite_link:
-            try:
-                # Отзываем ссылку через Telegram API (делает её невалидной для всех)
-                await bot.revoke_chat_invite_link(
-                    chat_id=CHANNEL_ID,
-                    invite_link=invite_link
-                )
-                
-                # Помечаем ссылку как отозванную в БД
-                from webhook_app import revoke_invite_link
-                revoke_invite_link(invite_link)
-                
-                print(f"✅ Ссылка пользователя {user_id} отозвана после первого использования")
-            except Exception as e:
-                print(f"⚠️ Ошибка отзыва ссылки для пользователя {user_id}: {e}")
+            # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: убеждаемся, что ссылка действительно принадлежит этому пользователю
+            from db import get_telegram_user_id_by_invite_link
+            link_owner_id = await get_telegram_user_id_by_invite_link(invite_link)
+            
+            if link_owner_id and link_owner_id == user_id:
+                # Ссылка принадлежит этому пользователю - отзываем её
+                try:
+                    # Отзываем ссылку через Telegram API (делает её невалидной для всех)
+                    await bot.revoke_chat_invite_link(
+                        chat_id=CHANNEL_ID,
+                        invite_link=invite_link
+                    )
+                    
+                    # Помечаем ссылку как отозванную в БД
+                    from webhook_app import revoke_invite_link
+                    revoke_invite_link(invite_link)
+                    
+                    print(f"✅ Ссылка пользователя {user_id} отозвана после использования (проверка пройдена)")
+                except Exception as e:
+                    print(f"⚠️ Ошибка отзыва ссылки для пользователя {user_id}: {e}")
+            else:
+                # Ссылка не принадлежит этому пользователю - это может быть попытка использования чужой ссылки
+                print(f"⚠️ Пользователь {user_id} попытался использовать ссылку, которая принадлежит другому пользователю (owner: {link_owner_id})")
+                # Можно добавить логику бана или уведомления администратору
 
 
 async def main():
