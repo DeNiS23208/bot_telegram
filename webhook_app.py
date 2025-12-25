@@ -1136,12 +1136,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (только банковские карты)")
             payment_method_id = None  # Не сохраняем для не-карт
         else:
-        from db import save_payment_method, set_auto_renewal
-        await save_payment_method(tg_user_id, payment_method_id)
+            from db import save_payment_method, set_auto_renewal
+            await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id}")
             
             # Включаем автопродление только если карта сохранена
-        await set_auto_renewal(tg_user_id, True)
+            await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True)")
             
             # Уведомляем пользователя о сохранении карты и включении автопродления
