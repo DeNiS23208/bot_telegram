@@ -72,7 +72,6 @@ BTN_STATUS_1 = "📊 Статус доступа"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "🔍 Проверить оплату"
 BTN_SUPPORT = "💬 Поддержка"
-BTN_CHANNEL_LINK = "🔗 Ссылка на канал"  # Показывается только если есть активная подписка
 
 
 async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
@@ -99,13 +98,6 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_STATUS_1)],
     ]
     
-    # Добавляем кнопку "Ссылка на канал" только если есть активная подписка
-    if telegram_id:
-        expires_at = await get_subscription_expires_at(telegram_id)
-        now = datetime.utcnow()
-        has_active_subscription = expires_at and expires_at > now
-        if has_active_subscription:
-            keyboard.append([KeyboardButton(text=BTN_CHANNEL_LINK)])
     
     keyboard.extend([
         [KeyboardButton(text=BTN_ABOUT_1)],
@@ -732,85 +724,7 @@ async def support(message: Message):
     )
 
 
-@dp.message(lambda m: (m.text or "").strip() == BTN_CHANNEL_LINK)
-async def send_channel_link(message: Message):
-    """Обработчик кнопки отправки ссылки на канал"""
-    await send_typing_action(message.chat.id)
-    user_id = message.from_user.id
-    
-    # Проверяем, есть ли активная подписка
-    expires_at = await get_subscription_expires_at(user_id)
-    now = datetime.utcnow()
-    
-    if not expires_at or expires_at <= now:
-        await message.answer(
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "❌ <b>Доступ не активен</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "У вас нет активного доступа к каналу.\n\n"
-            "💡 Для получения доступа нажмите кнопку 💳 Получить доступ",
-            parse_mode="HTML"
-        )
-        return
-    
-    # Получаем ссылку на канал из БД
-    invite_link = await get_invite_link(user_id)
-    
-    if invite_link:
-        expires_str = format_datetime_moscow(expires_at)
-        await message.answer(
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🔗 <b>Ссылка на канал</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-            "Нажмите на ссылку ниже, чтобы попасть в канал:\n\n"
-            f"{invite_link}\n\n"
-            "💡 Если ссылка не работает, обратитесь в поддержку: @otd_zabota",
-            parse_mode="HTML"
-        )
-    else:
-        # Если ссылка не найдена в БД, пытаемся создать новую
-        try:
-            from aiogram import Bot
-            bot_instance = Bot(token=TOKEN)
-            
-            # Пытаемся создать новую одноразовую ссылку, действительную до окончания подписки
-            invite = await bot_instance.create_chat_invite_link(
-                chat_id=CHANNEL_ID,
-                member_limit=1,  # Одноразовая ссылка - только один пользователь может использовать
-                expire_date=expires_at  # Ссылка действительна до окончания подписки
-            )
-            invite_link = invite.invite_link
-            
-            # Сохраняем ссылку в БД
-            from webhook_app import save_invite_link
-            from db import get_latest_payment_id
-            payment_id = await get_latest_payment_id(user_id)
-            if payment_id:
-                save_invite_link(invite_link, user_id, payment_id)
-            
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🔗 <b>Ссылка на канал</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "Нажмите на ссылку ниже, чтобы попасть в канал:\n\n"
-                f"{invite_link}\n\n"
-                "💡 Если ссылка не работает, обратитесь в поддержку: @otd_zabota",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            print(f"❌ Ошибка создания ссылки на канал: {e}")
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "❌ <b>Ошибка получения ссылки</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Не удалось получить ссылку на канал.\n\n"
-                "💬 Обратитесь в поддержку: @otd_zabota\n\n"
-                "Мы поможем вам получить доступ к каналу.",
-                parse_mode="HTML"
-            )
+# Обработчик кнопки "Ссылка на канал" удален - кнопка больше не используется
 
 
 @dp.message(Command("send_miniapp_to_channel"))
