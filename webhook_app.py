@@ -282,13 +282,19 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     BTN_SUPPORT = "💬 Поддержка"
     
     # Проверяем наличие активной подписки
-    from db import get_subscription_expires_at
+    from db import get_subscription_expires_at, is_auto_renewal_enabled
     expires_at = await get_subscription_expires_at(telegram_id)
     now = datetime.utcnow()
     has_active_subscription = expires_at and expires_at > now
     
-    # Если есть активная подписка - показываем "Управление доступом", иначе "Получить доступ"
-    payment_button = BTN_MANAGE_SUB if has_active_subscription else BTN_PAY_1
+    # Проверяем, включено ли автопродление
+    # Если автопродление отключено, показываем "Получить доступ" даже при активной подписке
+    auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
+    # Показываем "Управление доступом" только если подписка активна И автопродление включено
+    show_manage_button = has_active_subscription and auto_renewal_enabled
+    
+    # Если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
+    payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
     
     keyboard = [
         [KeyboardButton(text=payment_button)],
