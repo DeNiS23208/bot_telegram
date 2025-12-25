@@ -82,11 +82,17 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
         expires_at = await get_subscription_expires_at(telegram_id)
         now = datetime.utcnow()
         has_active_subscription = expires_at and expires_at > now
+        
+        # Проверяем, включено ли автопродление
+        # Если автопродление отключено, показываем "Получить доступ" даже при активной подписке
+        auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
+        # Показываем "Управление доступом" только если подписка активна И автопродление включено
+        show_manage_button = has_active_subscription and auto_renewal_enabled
     else:
-        has_active_subscription = False
+        show_manage_button = False
     
-    # Если есть активная подписка - показываем "Управление доступом", иначе "Получить доступ"
-    payment_button = BTN_MANAGE_SUB if has_active_subscription else BTN_PAY_1
+    # Если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
+    payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
     
     keyboard = [
         [KeyboardButton(text=payment_button)],
@@ -94,8 +100,12 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     ]
     
     # Добавляем кнопку "Ссылка на канал" только если есть активная подписка
-    if has_active_subscription:
-        keyboard.append([KeyboardButton(text=BTN_CHANNEL_LINK)])
+    if telegram_id:
+        expires_at = await get_subscription_expires_at(telegram_id)
+        now = datetime.utcnow()
+        has_active_subscription = expires_at and expires_at > now
+        if has_active_subscription:
+            keyboard.append([KeyboardButton(text=BTN_CHANNEL_LINK)])
     
     keyboard.extend([
         [KeyboardButton(text=BTN_ABOUT_1)],
@@ -952,6 +962,9 @@ async def cancel_subscription(message: Message):
         resize_keyboard=True
     )
     
+    # Получаем обновленное главное меню (теперь должно показывать "Получить доступ")
+    updated_menu = await main_menu(user_id)
+    
     await message.answer(
         "━━━━━━━━━━━━━━━━━━━━\n"
         "⏸️ <b>Автопродление отключено</b>\n"
@@ -968,7 +981,7 @@ async def cancel_subscription(message: Message):
         "• Если карта видна в личном кабинете YooKassa, вы можете удалить её там вручную\n"
         "• Для этого войдите в личный кабинет YooKassa и удалите сохранённую карту",
         parse_mode="HTML",
-        reply_markup=back_keyboard  # Показываем только кнопку "Назад в меню"
+        reply_markup=updated_menu  # Показываем обновленное главное меню с кнопкой "Получить доступ"
     )
 
 
