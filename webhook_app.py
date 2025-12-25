@@ -585,6 +585,7 @@ async def check_expired_subscriptions():
                     # Если подписка уже истекла
                     if expires_at <= now:
                         auto_payment_failed = False
+                        auto_payment_succeeded = False  # Флаг успешного автопродления
                         
                         # Проверяем, включено ли автопродление и есть ли сохраненный способ оплаты
                         if auto_renewal_enabled and saved_payment_method_id:
