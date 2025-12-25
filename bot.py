@@ -160,8 +160,8 @@ async def cmd_start(message: Message):
         return
     
     # Путь к видео или URL
-    # Приоритет: 1) локальный файл ScreenRecording, 2) WELCOME_VIDEO_PATH, 3) WELCOME_VIDEO_URL
-    VIDEO_RECORDING_PATH = os.path.join(os.path.dirname(__file__), "ScreenRecording_12-23-2025 10-50-29_1.MP4")
+    # Приоритет: 1) локальный файл Video_nail_hasanov, 2) WELCOME_VIDEO_PATH, 3) WELCOME_VIDEO_URL
+    VIDEO_RECORDING_PATH = os.path.join(os.path.dirname(__file__), "Video_nail_hasanov.mp4")
     VIDEO_PATH = os.getenv("WELCOME_VIDEO_PATH", "/opt/bot_telegram/welcome_video.mp4")
     VIDEO_GIF_PATH = os.getenv("WELCOME_VIDEO_GIF_PATH", "/opt/bot_telegram/welcome_video.gif")  # GIF для авто-воспроизведения
     VIDEO_URL = os.getenv("WELCOME_VIDEO_URL", None)  # Можно указать URL видео
@@ -182,12 +182,12 @@ async def cmd_start(message: Message):
     # Отправляем видео с текстом в caption (встроено в сообщение)
     video_sent = False
 
-    # ПРИОРИТЕТ 1: Сначала пробуем файл ScreenRecording
+    # ПРИОРИТЕТ 1: Сначала пробуем файл Video_nail_hasanov
     if os.path.exists(VIDEO_RECORDING_PATH):
         try:
             file_size = os.path.getsize(VIDEO_RECORDING_PATH)
             file_size_mb = file_size / 1024 / 1024
-            print(f"📹 Найден файл ScreenRecording, размер: {file_size_mb:.1f}MB")
+            print(f"📹 Найден файл Video_nail_hasanov, размер: {file_size_mb:.1f}MB")
             
             video_file = FSInputFile(VIDEO_RECORDING_PATH)
             max_video_size = MAX_VIDEO_SIZE_MB * 1024 * 1024
@@ -215,7 +215,7 @@ async def cmd_start(message: Message):
             video_sent = True
             return  # Прерываем выполнение
         except Exception as e:
-            print(f"⚠️ Ошибка отправки ScreenRecording: {e}")
+            print(f"⚠️ Ошибка отправки Video_nail_hasanov: {e}")
             import traceback
             traceback.print_exc()
 
