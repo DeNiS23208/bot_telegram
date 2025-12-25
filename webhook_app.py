@@ -570,7 +570,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                    continue
+                        continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
