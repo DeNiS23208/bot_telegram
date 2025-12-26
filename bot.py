@@ -703,18 +703,18 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-        starts_str = format_datetime_moscow(starts_at)
-        expires_str = format_datetime_moscow(expires_at)
-        await message.answer(
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "✅ <b>Оплата подтверждена!</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            starts_str = format_datetime_moscow(starts_at)
+            expires_str = format_datetime_moscow(expires_at)
+            await message.answer(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "✅ <b>Оплата подтверждена!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
-            parse_mode="HTML"
-        )
+                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+                parse_mode="HTML"
+            )
         else:
             # Если подписка еще не активирована через webhook, сообщаем об этом
             await message.answer(
