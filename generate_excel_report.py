@@ -496,15 +496,21 @@ def main():
         print("  ✓ Создание листа 'Пригласительные ссылки'...")
         create_invite_links_sheet(wb, conn)
         
-        # Сохраняем файл
+        # Сохраняем файл во временную директорию
+        import tempfile
+        temp_dir = tempfile.gettempdir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"bot_report_{timestamp}.xlsx"
-        wb.save(filename)
+        file_path = os.path.join(temp_dir, filename)
+        wb.save(file_path)
         
         conn.close()
         
         print(f"\n✅ Отчет успешно создан: {filename}")
-        print(f"   Полный путь: {os.path.abspath(filename)}")
+        print(f"   Полный путь: {file_path}")
+        
+        # Возвращаем путь к файлу для использования в других скриптах
+        return file_path
         
     except Exception as e:
         print(f"❌ Ошибка при создании отчета: {e}")
