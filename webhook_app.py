@@ -473,7 +473,7 @@ async def check_expired_payments():
                                     "Вы открыли ссылку на оплату, но не завершили платёж.\n"
                                     f"Ссылка была действительна {PAYMENT_LINK_VALID_MINUTES} минут.\n\n"
                                     "Для оплаты доступа нажмите кнопку 💳 Получить доступ и перейдите по новой ссылке."
-                            )
+                                )
                             if result:
                                 notified_payments.add(payment_id)  # Помечаем, что уведомление отправлено
                                 logger.info(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id} для платежа {payment_id} (один раз)")
@@ -709,12 +709,8 @@ async def check_expired_subscriptions():
                             notification_sent_key = f"auto_payment_failed_notification_{telegram_id}"
                             notification_sent_time = processed_users.get(notification_sent_key)
                             if not notification_sent_time or (datetime.utcnow() - notification_sent_time).total_seconds() > 300:
-                                # Создаем кнопку "Продлить подписку" для ручной оплаты
-                                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-                                keyboard = ReplyKeyboardMarkup(
-                                    keyboard=[[KeyboardButton(text="💳 Продлить подписку")]],
-                                    resize_keyboard=True
-                                )
+                                # Используем стандартное меню вместо кастомной кнопки
+                                menu = await get_main_menu_for_user(telegram_id)
                                 
                                 await safe_send_message(
                                     bot=bot,
@@ -722,11 +718,10 @@ async def check_expired_subscriptions():
                                     text="⚠️ <b>Автопродление отключено</b>\n\n"
                                         "Автоматическое продление доступа было отключено из-за неудачной попытки списания средств.\n\n"
                                         "💡 <b>Что делать:</b>\n"
-                                        "• Нажмите кнопку «Продлить подписку» для ручной оплаты\n"
-                                        "• Или используйте кнопку 💳 Получить доступ в меню\n\n"
+                                        "• Используйте кнопку 💳 Получить доступ в меню для ручной оплаты\n\n"
                                         "Рекомендуем карты Тинькофф / Альфа / ВТБ для более надежной работы автопродления.",
                                     parse_mode="HTML",
-                                    reply_markup=keyboard
+                                    reply_markup=menu
                                 )
                                 processed_users[notification_sent_key] = datetime.utcnow()
                                 logger.info(f"📧 Отправлено уведомление об отключении автопродления пользователю {telegram_id}")
@@ -739,7 +734,7 @@ async def check_expired_subscriptions():
                             from db import get_subscription_expired_notified, set_subscription_expired_notified
                             
                             already_notified = await get_subscription_expired_notified(telegram_id)
-                            
+                        
                             # Отправляем уведомление только если еще не отправляли
                             if not already_notified:
                                 await safe_send_message(
@@ -866,7 +861,7 @@ async def yookassa_webhook(request: Request):
                                     "❌ Платёж был отменён\n\n"
                                     "Вы вышли из формы оплаты без завершения платежа.\n\n"
                                 "Для оплаты нажмите кнопку 💳 Получить доступ и перейдите по новой ссылке."
-                            )
+                                )
                         elif any(keyword in reason for keyword in ['canceled_by_user', 'user_canceled']):
                             cancellation_reason = "отменен пользователем (выход из формы)"
                             message_text = (
@@ -1008,7 +1003,7 @@ async def yookassa_webhook(request: Request):
                             bot=bot,
                             chat_id=tg_user_id,
                             text=f"💰 Возврат средств выполнен\n\n"
-                                f"Сумма возврата: {amount} {currency}\n"
+                            f"Сумма возврата: {amount} {currency}\n"
                             f"ID платежа: {payment_id_refund}\n\n"
                             f"Ваш доступ был отменен.\n"
                             f"Деньги будут возвращены на карту в течение нескольких рабочих дней."
@@ -1234,7 +1229,7 @@ async def yookassa_webhook(request: Request):
         # Защита от использования другими будет через проверку в обработчике заявок
         invite_link = await safe_create_invite_link(
             bot=bot,
-            chat_id=CHANNEL_ID,
+                chat_id=CHANNEL_ID,
             creates_join_request=True,  # С заявкой - для проверки владельца
             expire_date=link_expire_date  # Ссылка действительна до окончания подписки
         )
@@ -1244,11 +1239,11 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Первая попытка создания ссылки не удалась, пробуем второй вариант")
             invite_link = await safe_create_invite_link(
                 bot=bot,
-                chat_id=CHANNEL_ID,
+                    chat_id=CHANNEL_ID,
                 creates_join_request=False,
                 member_limit=1,  # Одноразовая ссылка (без заявки)
                 expire_date=link_expire_date
-            )
+                )
         
         if not invite_link:
             # Если и это не получилось, пробуем основную ссылку канала
@@ -1278,7 +1273,7 @@ async def yookassa_webhook(request: Request):
             bot=bot,
             chat_id=tg_user_id,
             text="✅ <b>Оплата подтверждена!</b>\n\n"
-                "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором.",
+            "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором.",
             parse_mode="HTML",
             reply_markup=menu
         )
