@@ -663,19 +663,35 @@ async def check_payment(message: Message):
     await update_payment_status(payment_id, status)
 
     if status == "succeeded":
-        starts_at, expires_at = await activate_subscription_days(message.from_user.id, days=SUBSCRIPTION_DAYS)
-        starts_str = format_datetime_moscow(starts_at)
-        expires_str = format_datetime_moscow(expires_at)
-        await message.answer(
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "✅ <b>Оплата подтверждена!</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📅 <b>Доступ активен с:</b> {starts_str}\n"
-            f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
-            parse_mode="HTML"
-        )
+        # НЕ активируем подписку заново - только показываем существующие данные
+        # Активация подписки происходит в webhook при успешной оплате
+        starts_at = await get_subscription_starts_at(message.from_user.id)
+        expires_at = await get_subscription_expires_at(message.from_user.id)
+        
+        if starts_at and expires_at:
+            starts_str = format_datetime_moscow(starts_at)
+            expires_str = format_datetime_moscow(expires_at)
+            await message.answer(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "✅ <b>Оплата подтверждена!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📅 <b>Доступ активен с:</b> {starts_str}\n"
+                f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
+                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+                parse_mode="HTML"
+            )
+        else:
+            # Если подписка еще не активирована через webhook, сообщаем об этом
+            await message.answer(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "⏳ <b>Платёж обрабатывается</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Оплата успешна, но подписка еще активируется.\n\n"
+                "💡 Подождите 1-2 минуты и нажмите эту кнопку ещё раз.\n"
+                "💬 Если проблема сохраняется, обратитесь в поддержку: @otd_zabota",
+                parse_mode="HTML"
+            )
     elif status in ("pending", "waiting_for_capture"):
         await message.answer(
             "━━━━━━━━━━━━━━━━━━━━\n"
