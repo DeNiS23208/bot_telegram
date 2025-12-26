@@ -11,9 +11,9 @@ SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS = 3  # За сколько дней ув
 SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS = 24  # Окно для уведомления (часы)
 
 # Интервалы проверки фоновых задач
-CHECK_EXPIRED_PAYMENTS_INTERVAL_SECONDS = 60  # Проверка истекших платежей (секунды)
-# ВРЕМЕННО ДЛЯ ТЕСТИРОВАНИЯ: проверка каждые 30 секунд вместо 3600
-CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS = 30  # Проверка истекших подписок (секунды)
+CHECK_EXPIRED_PAYMENTS_INTERVAL_SECONDS = 120  # Проверка истекших платежей (секунды) - увеличено для снижения нагрузки
+# Оптимизировано: проверка каждые 2 минуты вместо 30 секунд для снижения нагрузки на сервер
+CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS = 120  # Проверка истекших подписок (секунды) - увеличено для снижения нагрузки
 CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS = 3600  # Проверка истекающих подписок (секунды)
 
 # Ограничения для уведомлений
