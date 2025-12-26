@@ -230,9 +230,9 @@ async def set_auto_renewal(telegram_id: int, enabled: bool, payment_method_id: O
                     (1, telegram_id)
                 )
         else:
-            # Выключаем автопродление
+            # Выключаем автопродление И удаляем сохраненный способ оплаты
             await db.execute(
-                "UPDATE subscriptions SET auto_renewal_enabled = ? WHERE telegram_id = ?",
+                "UPDATE subscriptions SET auto_renewal_enabled = ?, saved_payment_method_id = NULL WHERE telegram_id = ?",
                 (0, telegram_id)
             )
         await db.commit()

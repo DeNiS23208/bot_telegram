@@ -910,10 +910,8 @@ async def cancel_subscription(message: Message):
         )
         return
     
-    # Отключаем автопродление И удаляем способ оплаты (карту)
+    # Отключаем автопродление (автоматически удаляет сохраненный способ оплаты)
     await set_auto_renewal(user_id, False)
-    from db import delete_payment_method
-    payment_method_deleted = await delete_payment_method(user_id)
     
     # Получаем информацию о подписке
     expires_str = format_datetime_moscow(expires_at)
