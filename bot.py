@@ -11,6 +11,8 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.enums import ChatAction
 from dotenv import load_dotenv
 
+from telegram_utils import safe_send_message, safe_send_video
+
 from db import (
     init_db,
     ensure_user,
@@ -255,7 +257,17 @@ async def cmd_start(message: Message):
                 if duration:
                     video_params["duration"] = int(duration)
                 
-                await bot.send_video(**video_params)
+                await safe_send_video(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    video=video_file,
+                    caption=welcome_text,
+                    parse_mode="HTML",
+                    reply_markup=await main_menu(message.from_user.id),
+                    width=width,
+                    height=height,
+                    duration=int(duration) if duration else None
+                )
                 print(f"✅ Видео успешно отправлено: {VIDEO_RECORDING_PATH}")
             video_sent = True
             return  # Прерываем выполнение
@@ -373,18 +385,28 @@ async def cmd_start(message: Message):
                         video_params["width"] = width
                         video_params["height"] = height
                     
-                    await bot.send_video(**video_params)
-                    print(f"✅ Видео успешно отправлено из файла: {VIDEO_PATH}")
-                except Exception as meta_error:
-                    # Если не удалось получить метаданные, отправляем без них
-                    print(f"⚠️ Не удалось получить метаданные видео: {meta_error}, отправляю без них")
-                    await bot.send_video(
+                    await safe_send_video(
+                        bot=bot,
                         chat_id=message.chat.id,
                         video=video_file,
                         caption=welcome_text,
                         parse_mode="HTML",
-                        supports_streaming=True,
                         reply_markup=await main_menu(message.from_user.id),
+                        width=width,
+                        height=height,
+                        duration=duration
+                    )
+                    print(f"✅ Видео успешно отправлено из файла: {VIDEO_PATH}")
+                except Exception as meta_error:
+                    # Если не удалось получить метаданные, отправляем без них
+                    print(f"⚠️ Не удалось получить метаданные видео: {meta_error}, отправляю без них")
+                    await safe_send_video(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        video=video_file,
+                        caption=welcome_text,
+                        parse_mode="HTML",
+                        reply_markup=await main_menu(message.from_user.id)
                     )
                     print(f"✅ Видео успешно отправлено из файла: {VIDEO_PATH}")
             return  # Прерываем выполнение, чтобы не отправлять дублирующее сообщение
