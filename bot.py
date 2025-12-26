@@ -587,6 +587,18 @@ async def pay(message: Message):
         starts_at = await get_subscription_starts_at(message.from_user.id)
         starts_str = format_datetime_moscow(starts_at) if starts_at else "неизвестно"
         expires_str = format_datetime_moscow(expires_at)
+        
+        # Проверяем, включено ли автопродление
+        auto_renewal_enabled = await is_auto_renewal_enabled(message.from_user.id)
+        
+        # Формируем текст в зависимости от статуса автопродления
+        if auto_renewal_enabled:
+            # Если автопродление включено - показываем кнопку управления
+            management_text = f"⚙️ Для управления доступом нажмите кнопку «{BTN_MANAGE_SUB}»"
+        else:
+            # Если автопродление отключено - сообщаем, что оплата доступна после окончания подписки
+            management_text = "💡 Оплатить доступ вы сможете после окончания вашей подписки"
+        
         await message.answer(
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"✅ <b>Доступ уже активирован!</b>\n"
@@ -594,7 +606,7 @@ async def pay(message: Message):
             f"📅 <b>Активна с:</b> {starts_str}\n"
             f"📅 <b>Активна до:</b> {expires_str}\n\n"
             f"💬 Если у вас нет доступа к платному каналу, обратитесь к менеджеру: @otd_zabota\n\n"
-            f"⚙️ Для управления доступом нажмите кнопку «{BTN_MANAGE_SUB}»",
+            f"{management_text}",
             parse_mode="HTML"
         )
         return
@@ -691,18 +703,18 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✅ <b>Оплата подтверждена!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Оплата подтверждена!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
-                parse_mode="HTML"
-            )
+            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+            parse_mode="HTML"
+        )
         else:
             # Если подписка еще не активирована через webhook, сообщаем об этом
             await message.answer(
@@ -1125,12 +1137,12 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # 1. Пользователь является владельцем ссылки
             # 2. У владельца есть активная подписка
             if link_owner_id and link_owner_id == user_id and has_active_subscription:
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-            else:
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+        else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
