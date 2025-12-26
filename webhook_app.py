@@ -1234,24 +1234,25 @@ async def yookassa_webhook(request: Request):
         # Если подписка истекает через 30 дней, ссылка будет валидна 30 дней
         link_expire_date = subscription_expires_at if subscription_expires_at else (datetime.utcnow() + timedelta(days=SUBSCRIPTION_DAYS))
         
-        # Создаем ссылку БЕЗ member_limit, чтобы владелец мог использовать её многократно
-        # Защита от использования другими пользователями будет через проверку в обработчике присоединения
+        # Создаем ссылку С заявкой на вступление для проверки владельца
+        # member_limit=1 - только один пользователь может использовать ссылку
+        # creates_join_request=True - пользователь должен подать заявку, которую мы проверим
         try:
             invite = await bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
-                creates_join_request=False,  # БЕЗ заявки - прямой доступ
-                # НЕ устанавливаем member_limit - ссылка будет доступна для владельца в течение всего периода
+                creates_join_request=True,  # С заявкой - для проверки владельца
+                member_limit=1,  # Одноразовая ссылка - только один пользователь может использовать
                 expire_date=link_expire_date  # Ссылка действительна до окончания подписки
             )
             invite_link = invite.invite_link
-            logger.info(f"✅ Создана индивидуальная ссылка (без заявки) для пользователя {tg_user_id}, действительна до {link_expire_date}")
+            logger.info(f"✅ Создана индивидуальная ссылка с заявкой для пользователя {tg_user_id}, действительна до {link_expire_date}")
         except Exception as e1:
-            # Если не получилось, пробуем без параметра creates_join_request (по умолчанию)
+            # Если не получилось, пробуем без creates_join_request
             logger.warning(f"⚠️ Первая попытка создания ссылки не удалась: {e1}, пробуем второй вариант")
             try:
                 invite = await bot.create_chat_invite_link(
                     chat_id=CHANNEL_ID,
-                    # НЕ устанавливаем member_limit - ссылка будет доступна для владельца в течение всего периода
+                    member_limit=1,  # Одноразовая ссылка
                     expire_date=link_expire_date  # Ссылка действительна до окончания подписки
                 )
                 invite_link = invite.invite_link
