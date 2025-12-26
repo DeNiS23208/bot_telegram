@@ -63,12 +63,12 @@ def create_users_sheet(wb, conn):
     # Заголовок
     ws['A1'] = "СПИСОК ПОЛЬЗОВАТЕЛЕЙ"
     ws['A1'].font = TITLE_FONT
-    ws.merge_cells('A1:H1')
+    ws.merge_cells('A1:I1')
     
     # Заголовки колонок
     headers = [
         "ID Telegram", "Username", "Дата регистрации", "Количество платежей",
-        "Доступ с", "Доступ до", "Статус платежа", "Статус на канале"
+        "Доступ с", "Доступ до", "Статус платежа", "Статус на канале", "Добавлен/Забанен"
     ]
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=3, column=col, value=header)
@@ -123,8 +123,9 @@ def create_users_sheet(wb, conn):
         elif last_payment_status in ["canceled", "expired"]:
             status_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
         
-        # Статус на канале
+        # Статус на канале (детальный)
         channel_status = "—"
+        channel_simple_status = "—"
         if approved_at:
             try:
                 expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00')) if expires_at else None
@@ -134,14 +135,18 @@ def create_users_sheet(wb, conn):
                 if expires_dt and expires_dt > now:
                     # Подписка активна
                     channel_status = f"✅ Добавлен: {format_datetime(approved_at)}"
+                    channel_simple_status = "✅ Добавлен"
                 elif last_link_revoked and expires_dt:
                     # Забанен (ссылка отозвана и подписка истекла)
                     channel_status = f"❌ Забанен (примерно): {format_datetime(expires_at)}"
+                    channel_simple_status = "❌ Забанен"
                 else:
                     # Был добавлен, но статус неясен
                     channel_status = f"ℹ️ Добавлен: {format_datetime(approved_at)}"
+                    channel_simple_status = "✅ Добавлен"
             except:
                 channel_status = f"ℹ️ Добавлен: {format_datetime(approved_at)}"
+                channel_simple_status = "✅ Добавлен"
         
         channel_status_cell = ws.cell(row=row, column=8, value=channel_status)
         channel_status_cell.border = BORDER
@@ -149,6 +154,17 @@ def create_users_sheet(wb, conn):
             channel_status_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         elif "❌" in channel_status:
             channel_status_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        
+        # Простой статус на канале (Добавлен/Забанен)
+        simple_status_cell = ws.cell(row=row, column=9, value=channel_simple_status)
+        simple_status_cell.border = BORDER
+        simple_status_cell.alignment = Alignment(horizontal='center', vertical='center')
+        if channel_simple_status == "✅ Добавлен":
+            simple_status_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+            simple_status_cell.font = Font(bold=True)
+        elif channel_simple_status == "❌ Забанен":
+            simple_status_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            simple_status_cell.font = Font(bold=True)
         
         row += 1
     
@@ -161,6 +177,7 @@ def create_users_sheet(wb, conn):
     ws.column_dimensions['F'].width = 22
     ws.column_dimensions['G'].width = 18
     ws.column_dimensions['H'].width = 35
+    ws.column_dimensions['I'].width = 18
 
 def create_payments_sheet(wb, conn):
     """Создает лист с платежами"""
