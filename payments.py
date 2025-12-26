@@ -43,7 +43,7 @@ def create_payment(
 
         # ✅ КРИТИЧНО: это нужно webhook'у
         "metadata": {"telegram_user_id": str(telegram_user_id)},
-        
+
         # ✅ ВАЖНО: merchant_customer_id нужен для сохранения способа оплаты
         "merchant_customer_id": str(telegram_user_id),
 

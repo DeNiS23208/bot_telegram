@@ -23,9 +23,9 @@ if [ ! -f "bot.db" ]; then
 fi
 
 DB_SIZE=$(du -h bot.db | cut -f1)
-DB_USERS=$(sqlite3 bot.db "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "0")
-DB_PAYMENTS=$(sqlite3 bot.db "SELECT COUNT(*) FROM payments;" 2>/dev/null || echo "0")
-DB_SUBS=$(sqlite3 bot.db "SELECT COUNT(*) FROM subscriptions;" 2>/dev/null || echo "0")
+DB_USERS=$(python3 -c "import sqlite3; conn = sqlite3.connect('bot.db'); print(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
+DB_PAYMENTS=$(python3 -c "import sqlite3; conn = sqlite3.connect('bot.db'); print(conn.execute('SELECT COUNT(*) FROM payments').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
+DB_SUBS=$(python3 -c "import sqlite3; conn = sqlite3.connect('bot.db'); print(conn.execute('SELECT COUNT(*) FROM subscriptions').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
 
 echo -e "${GREEN}✅ База данных найдена${NC}"
 echo "   Размер: $DB_SIZE"
@@ -47,10 +47,10 @@ echo ""
 # Шаг 3: Проверка целостности backup
 echo "🔍 ШАГ 3: Проверка целостности backup"
 echo "----------------------------------------"
-if sqlite3 "$BACKUP_FILE" "SELECT COUNT(*) FROM users;" > /dev/null 2>&1; then
-    BACKUP_USERS=$(sqlite3 "$BACKUP_FILE" "SELECT COUNT(*) FROM users;")
-    BACKUP_PAYMENTS=$(sqlite3 "$BACKUP_FILE" "SELECT COUNT(*) FROM payments;")
-    BACKUP_SUBS=$(sqlite3 "$BACKUP_FILE" "SELECT COUNT(*) FROM subscriptions;")
+if python3 -c "import sqlite3; conn = sqlite3.connect('$BACKUP_FILE'); conn.execute('SELECT COUNT(*) FROM users').fetchone(); conn.close()" > /dev/null 2>&1; then
+    BACKUP_USERS=$(python3 -c "import sqlite3; conn = sqlite3.connect('$BACKUP_FILE'); print(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
+    BACKUP_PAYMENTS=$(python3 -c "import sqlite3; conn = sqlite3.connect('$BACKUP_FILE'); print(conn.execute('SELECT COUNT(*) FROM payments').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
+    BACKUP_SUBS=$(python3 -c "import sqlite3; conn = sqlite3.connect('$BACKUP_FILE'); print(conn.execute('SELECT COUNT(*) FROM subscriptions').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
     
     if [ "$DB_USERS" = "$BACKUP_USERS" ] && [ "$DB_PAYMENTS" = "$BACKUP_PAYMENTS" ] && [ "$DB_SUBS" = "$BACKUP_SUBS" ]; then
         echo -e "${GREEN}✅ Backup валиден, данные совпадают${NC}"
@@ -101,9 +101,9 @@ cp "$BACKUP_FILE" bot.db
 chmod 644 bot.db
 
 # Проверяем восстановленную базу
-RESTORED_USERS=$(sqlite3 bot.db "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "0")
-RESTORED_PAYMENTS=$(sqlite3 bot.db "SELECT COUNT(*) FROM payments;" 2>/dev/null || echo "0")
-RESTORED_SUBS=$(sqlite3 bot.db "SELECT COUNT(*) FROM subscriptions;" 2>/dev/null || echo "0")
+RESTORED_USERS=$(python3 -c "import sqlite3; conn = sqlite3.connect('bot.db'); print(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
+RESTORED_PAYMENTS=$(python3 -c "import sqlite3; conn = sqlite3.connect('bot.db'); print(conn.execute('SELECT COUNT(*) FROM payments').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
+RESTORED_SUBS=$(python3 -c "import sqlite3; conn = sqlite3.connect('bot.db'); print(conn.execute('SELECT COUNT(*) FROM subscriptions').fetchone()[0]); conn.close()" 2>/dev/null || echo "0")
 
 if [ "$DB_USERS" = "$RESTORED_USERS" ] && [ "$DB_PAYMENTS" = "$RESTORED_PAYMENTS" ] && [ "$DB_SUBS" = "$RESTORED_SUBS" ]; then
     echo -e "${GREEN}✅ Восстановление успешно!${NC}"

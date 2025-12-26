@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import aiosqlite
 import asyncio
 from datetime import datetime, timedelta
@@ -24,7 +23,7 @@ from config import (
     MAX_NOTIFIED_USERS_CACHE_SIZE,
     PAYMENT_AMOUNT_RUB,
 )
-from db import is_user_allowed
+from db import is_user_allowed, cleanup_old_data
 from telegram_utils import safe_send_message, safe_create_invite_link
 
 # Настройка логирования
@@ -58,12 +57,34 @@ app = FastAPI()
 bot = Bot(token=BOT_TOKEN)
 
 # Запускаем фоновые задачи для проверки истекших платежей и подписок
+async def cleanup_old_data_task():
+    """Фоновая задача для очистки старых данных (запускается раз в день)"""
+    # Ждем 1 час после старта, затем запускаем каждые 24 часа
+    await asyncio.sleep(3600)
+    
+    while True:
+        try:
+            logger.info("🧹 Запуск очистки старых данных...")
+            deleted = await cleanup_old_data()
+            logger.info(f"✅ Очистка завершена, удалено {deleted} записей")
+            # Запускаем очистку раз в день (24 часа)
+            await asyncio.sleep(86400)
+        except Exception as e:
+            logger.error(f"❌ Ошибка при очистке старых данных: {e}")
+            # При ошибке ждем 6 часов перед следующей попыткой
+            await asyncio.sleep(21600)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Запускаем фоновые задачи при старте приложения"""
+    # Инициализируем таблицы
+    await init_webhook_tables()
+    # Запускаем фоновые задачи
     asyncio.create_task(check_expired_payments())
     asyncio.create_task(check_expired_subscriptions())
     asyncio.create_task(check_subscriptions_expiring_soon())
+    asyncio.create_task(cleanup_old_data_task())  # Добавляем задачу очистки
     logger.info("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
 
 
@@ -156,22 +177,23 @@ async def payment_return(request: Request):
     # Возвращаем простую страницу или редирект
     return {"status": "ok", "message": "Вы вернулись с формы оплаты"}
 
-# ================== DB ==================
-def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
+# ================== DB (ОПТИМИЗИРОВАННЫЕ ASYNC ФУНКЦИИ) ==================
+async def init_webhook_tables():
+    """Инициализирует таблицы для webhook (вызывается один раз при старте)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
         CREATE TABLE IF NOT EXISTS processed_payments (
             payment_id TEXT PRIMARY KEY,
             processed_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
+        await db.execute("""
         CREATE TABLE IF NOT EXISTS approved_users (
             telegram_user_id INTEGER PRIMARY KEY,
             approved_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
+        await db.execute("""
         CREATE TABLE IF NOT EXISTS invite_links (
             invite_link TEXT PRIMARY KEY,
             telegram_user_id INTEGER NOT NULL,
@@ -181,95 +203,59 @@ def db():
             FOREIGN KEY (telegram_user_id) REFERENCES approved_users(telegram_user_id)
         )
     """)
-    # Создаем таблицы для подписок и платежей (если их нет)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            username TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            telegram_id INTEGER PRIMARY KEY,
-            expires_at TEXT,
-            starts_at TEXT,
-            auto_renewal_enabled INTEGER DEFAULT 0,
-            saved_payment_method_id TEXT,
-            subscription_expired_notified INTEGER DEFAULT 0,
-            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
-        )
-    """)
-    # Добавляем колонку subscription_expired_notified, если её нет (для существующих БД)
-    try:
-        conn.execute("ALTER TABLE subscriptions ADD COLUMN subscription_expired_notified INTEGER DEFAULT 0")
-        conn.commit()
-    except Exception:
-        pass  # Колонка уже существует
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            payment_id TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    return conn
+        # Создаем индексы для оптимизации
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_invite_links_user_id ON invite_links(telegram_user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_invite_links_revoked ON invite_links(revoked)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_processed_payments_at ON processed_payments(processed_at)")
+        await db.commit()
 
 
-def already_processed(payment_id: str) -> bool:
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM processed_payments WHERE payment_id = ?", (payment_id,))
-    row = cur.fetchone()
-    conn.close()
+async def already_processed(payment_id: str) -> bool:
+    """Проверяет, был ли платеж уже обработан (async версия)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM processed_payments WHERE payment_id = ?", (payment_id,))
+        row = await cur.fetchone()
     return row is not None
 
 
-def mark_processed(payment_id: str):
-    conn = db()
-    conn.execute(
+async def mark_processed(payment_id: str):
+    """Помечает платеж как обработанный (async версия)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
         "INSERT OR IGNORE INTO processed_payments(payment_id, processed_at) VALUES (?, ?)",
         (payment_id, datetime.utcnow().isoformat())
     )
-    conn.commit()
-    conn.close()
+        await db.commit()
 
 
-def allow_user(tg_user_id: int):
-    conn = db()
-    conn.execute(
+async def allow_user(tg_user_id: int):
+    """Добавляет пользователя в список одобренных (async версия)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
         "INSERT OR REPLACE INTO approved_users(telegram_user_id, approved_at) VALUES (?, ?)",
         (tg_user_id, datetime.utcnow().isoformat())
     )
-    conn.commit()
-    conn.close()
+        await db.commit()
 
 
-
-
-def save_invite_link(invite_link: str, telegram_user_id: int, payment_id: str):
-    """Сохраняет информацию о созданной ссылке-приглашении"""
-    conn = db()
-    conn.execute(
+async def save_invite_link(invite_link: str, telegram_user_id: int, payment_id: str):
+    """Сохраняет информацию о созданной ссылке-приглашении (async версия)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
         "INSERT OR REPLACE INTO invite_links(invite_link, telegram_user_id, payment_id, created_at) VALUES (?, ?, ?, ?)",
         (invite_link, telegram_user_id, payment_id, datetime.utcnow().isoformat())
     )
-    conn.commit()
-    conn.close()
+        await db.commit()
 
 
-def revoke_invite_link(invite_link: str):
-    """Помечает ссылку как отозванную"""
-    conn = db()
-    conn.execute(
+async def revoke_invite_link(invite_link: str):
+    """Помечает ссылку как отозванную (async версия)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
         "UPDATE invite_links SET revoked = 1 WHERE invite_link = ?",
         (invite_link,)
     )
-    conn.commit()
-    conn.close()
+        await db.commit()
 
 
 async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
@@ -705,7 +691,7 @@ async def check_expired_subscriptions():
                             from db import get_invite_link
                             user_invite_link = await get_invite_link(telegram_id)
                             if user_invite_link:
-                                revoke_invite_link(user_invite_link)
+                                await revoke_invite_link(user_invite_link)
                                 logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за истечения подписки")
                             
                             # Баним пользователя в канале (удаляем из канала) ТОЛЬКО если автопродление не удалось
@@ -1045,7 +1031,7 @@ async def yookassa_webhook(request: Request):
     if event != "payment.succeeded":
         return {"ok": True, "event": event}
 
-    if already_processed(payment_id):
+    if await already_processed(payment_id):
         return {"ok": True, "duplicate": True}
 
     # Получаем актуальный статус платежа из API
@@ -1055,7 +1041,7 @@ async def yookassa_webhook(request: Request):
     # КРИТИЧЕСКАЯ ПРОВЕРКА: проверяем статус ДО активации подписки
     if current_status != "succeeded":
         logger.warning(f"⚠️ Событие payment.succeeded получено, но статус платежа {payment_id} = {current_status}, игнорируем")
-        mark_processed(payment_id)
+        await mark_processed(payment_id)
         return {"ok": True, "ignored": f"status is {current_status}, not succeeded"}
 
     # Дополнительная проверка: проверяем, что платеж действительно оплачен
@@ -1065,14 +1051,14 @@ async def yookassa_webhook(request: Request):
         if hasattr(payment, 'paid'):
             if not payment.paid:
                 logger.warning(f"⚠️ Платеж {payment_id} не оплачен (paid=False), игнорируем")
-                mark_processed(payment_id)
+                await mark_processed(payment_id)
                 return {"ok": True, "ignored": "payment not paid"}
         
         # Проверяем поле captured (если доступно) - должно быть True для успешного платежа
         if hasattr(payment, 'captured'):
             if not payment.captured:
                 logger.warning(f"⚠️ Платеж {payment_id} не захвачен (captured=False), игнорируем")
-                mark_processed(payment_id)
+                await mark_processed(payment_id)
                 return {"ok": True, "ignored": "payment not captured"}
         
         # Проверяем, что сумма платежа больше 0
@@ -1085,7 +1071,7 @@ async def yookassa_webhook(request: Request):
             
             if amount_value is not None and amount_value <= 0:
                 logger.warning(f"⚠️ Платеж {payment_id} имеет нулевую или отрицательную сумму ({amount_value}), игнорируем")
-                mark_processed(payment_id)
+                await mark_processed(payment_id)
                 return {"ok": True, "ignored": f"invalid amount: {amount_value}"}
     except Exception as e:
         logger.error(f"❌ Ошибка проверки параметров платежа: {e}")
@@ -1096,7 +1082,7 @@ async def yookassa_webhook(request: Request):
     tg_user_id = meta.get("telegram_user_id")
 
     if not tg_user_id:
-        mark_processed(payment_id)
+        await mark_processed(payment_id)
         return {"ok": True, "ignored": "no telegram_user_id"}
 
     tg_user_id = int(tg_user_id)
@@ -1105,17 +1091,17 @@ async def yookassa_webhook(request: Request):
     payment_refresh = Payment.find_one(payment_id)
     if payment_refresh.status != "succeeded":
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Статус платежа {payment_id} изменился с succeeded на {payment_refresh.status} перед активацией подписки!")
-        mark_processed(payment_id)
+        await mark_processed(payment_id)
         return {"ok": True, "ignored": f"status changed to {payment_refresh.status}"}
     
     # Финальная проверка: убеждаемся что платеж действительно успешен
     if payment_refresh.status != "succeeded":
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Финальная проверка - статус платежа {payment_id} = {payment_refresh.status}, не succeeded!")
-        mark_processed(payment_id)
+        await mark_processed(payment_id)
         return {"ok": True, "ignored": f"final check failed: {payment_refresh.status}"}
 
     # разрешаем пользователю вступление
-    allow_user(tg_user_id)
+    await allow_user(tg_user_id)
     
     # Сохраняем payment_method_id если он есть (для автопродления)
     payment_method_id = None
@@ -1296,7 +1282,7 @@ async def yookassa_webhook(request: Request):
             parse_mode="HTML",
             reply_markup=menu
         )
-        mark_processed(payment_id)
+        await mark_processed(payment_id)
         return {"ok": True, "error": "failed to create invite link"}
 
     # Получаем даты начала и окончания подписки (уже сохранены выше)
@@ -1307,7 +1293,7 @@ async def yookassa_webhook(request: Request):
     # Сохраняем информацию о ссылке в БД и отправляем сообщение
     # ВАЖНО: Ссылка отправляется только если она была успешно создана
     if invite_link:
-        save_invite_link(invite_link, tg_user_id, payment_id)
+        await save_invite_link(invite_link, tg_user_id, payment_id)
         
         # Форматируем даты для отображения
         if starts_at_dt and expires_at_dt:
