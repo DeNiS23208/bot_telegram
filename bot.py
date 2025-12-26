@@ -1137,12 +1137,12 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # 1. Пользователь является владельцем ссылки
             # 2. У владельца есть активная подписка
             if link_owner_id and link_owner_id == user_id and has_active_subscription:
-            try:
-                await join_request.approve()
+                try:
+                    await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
-            except Exception as e:
-                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-        else:
+                except Exception as e:
+                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+            else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
