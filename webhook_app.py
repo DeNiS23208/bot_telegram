@@ -432,7 +432,7 @@ async def get_subscriptions_expiring_soon():
 
 
 async def check_expired_payments():
-    """Проверяет истекшие платежи и уведомляет пользователей"""
+    """Проверяет истекшие платежи и уведомляет пользователей ровно через 10 минут после создания"""
     notified_payments = set()  # Отслеживаем, для каких платежей уже отправлено уведомление
     
     while True:
@@ -445,6 +445,25 @@ async def check_expired_payments():
                 # Пропускаем, если уведомление уже было отправлено для этого платежа
                 if payment_id in notified_payments:
                     continue
+                
+                # Проверяем точное время истечения - должно быть ровно 10 минут (с погрешностью ±1 минута)
+                try:
+                    created_at_dt = datetime.fromisoformat(created_at)
+                    now = datetime.utcnow()
+                    time_since_creation = (now - created_at_dt).total_seconds() / 60  # в минутах
+                    
+                    # Проверяем, что прошло ровно 10 минут (с погрешностью ±1 минута из-за интервала проверки)
+                    # Это гарантирует, что уведомление будет отправлено в течение 1-2 минут после истечения 10 минут
+                    if time_since_creation < PAYMENT_LINK_VALID_MINUTES - 1:
+                        # Еще не истекло, пропускаем
+                        continue
+                    if time_since_creation > PAYMENT_LINK_VALID_MINUTES + 2:
+                        # Уже прошло больше 12 минут, пропускаем (чтобы не отправлять повторно)
+                        notified_payments.add(payment_id)
+                        continue
+                except Exception as time_error:
+                    logger.warning(f"⚠️ Ошибка проверки времени для платежа {payment_id}: {time_error}")
+                    # Продолжаем обработку, если не удалось проверить время
                 
                 # Проверяем актуальный статус платежа в ЮKassa
                 try:
@@ -476,7 +495,7 @@ async def check_expired_payments():
                                 )
                             if result:
                                 notified_payments.add(payment_id)  # Помечаем, что уведомление отправлено
-                                logger.info(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id} для платежа {payment_id} (один раз)")
+                                logger.info(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id} для платежа {payment_id} (один раз, через {time_since_creation:.1f} минут после создания)")
                             else:
                                 logger.warning(f"⚠️ Не удалось отправить уведомление об истечении ссылки пользователю {telegram_id}")
                     else:
