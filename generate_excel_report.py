@@ -201,7 +201,7 @@ def create_subscriptions_sheet(wb, conn):
     """)
     
     row = 4
-    now = datetime.now(datetime.timezone.utc)
+    now = datetime.now(timezone.utc)
     for record in cur.fetchall():
         telegram_id, username, starts_at, expires_at, auto_renewal, saved_card, notified = record
         ws.cell(row=row, column=1, value=telegram_id).border = BORDER
