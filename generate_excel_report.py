@@ -7,10 +7,14 @@ import sqlite3
 import os
 import sys
 from datetime import datetime, timezone
+import pytz
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
+
+# Московское время
+MoscowTz = pytz.timezone('Europe/Moscow')
 
 # Путь к базе данных
 DB_PATH = os.getenv("DB_PATH", "bot.db")
@@ -27,12 +31,17 @@ BORDER = Border(
 )
 
 def format_datetime(dt_str):
-    """Форматирует дату в читаемый вид"""
+    """Форматирует дату в читаемый вид в МСК времени"""
     if not dt_str:
         return "—"
     try:
         dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-        return dt.strftime("%d.%m.%Y %H:%M:%S")
+        # Если нет timezone, считаем что UTC
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        # Конвертируем в МСК
+        moscow_dt = dt.astimezone(MoscowTz)
+        return moscow_dt.strftime("%d.%m.%Y %H:%M:%S МСК")
     except:
         return dt_str
 
@@ -54,10 +63,13 @@ def create_users_sheet(wb, conn):
     # Заголовок
     ws['A1'] = "СПИСОК ПОЛЬЗОВАТЕЛЕЙ"
     ws['A1'].font = TITLE_FONT
-    ws.merge_cells('A1:D1')
+    ws.merge_cells('A1:H1')
     
     # Заголовки колонок
-    headers = ["ID Telegram", "Username", "Дата регистрации", "Количество платежей"]
+    headers = [
+        "ID Telegram", "Username", "Дата регистрации", "Количество платежей",
+        "Доступ с", "Доступ до", "Статус платежа", "Статус на канале"
+    ]
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=3, column=col, value=header)
         cell.fill = HEADER_FILL
@@ -65,31 +77,90 @@ def create_users_sheet(wb, conn):
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = BORDER
     
-    # Получаем данные
+    # Получаем данные с дополнительной информацией
     cur = conn.cursor()
     cur.execute("""
-        SELECT u.telegram_id, u.username, u.created_at,
-               COUNT(p.id) as payment_count
+        SELECT 
+            u.telegram_id, 
+            u.username, 
+            u.created_at,
+            COUNT(DISTINCT p.id) as payment_count,
+            s.starts_at,
+            s.expires_at,
+            (SELECT status FROM payments WHERE telegram_id = u.telegram_id ORDER BY id DESC LIMIT 1) as last_payment_status,
+            au.approved_at,
+            (SELECT revoked FROM invite_links WHERE telegram_user_id = u.telegram_id ORDER BY created_at DESC LIMIT 1) as last_link_revoked
         FROM users u
         LEFT JOIN payments p ON u.telegram_id = p.telegram_id
+        LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id
+        LEFT JOIN approved_users au ON u.telegram_id = au.telegram_user_id
         GROUP BY u.telegram_id
         ORDER BY u.created_at DESC
     """)
     
     row = 4
+    now = datetime.now(timezone.utc)
     for record in cur.fetchall():
-        telegram_id, username, created_at, payment_count = record
+        telegram_id, username, created_at, payment_count, starts_at, expires_at, last_payment_status, approved_at, last_link_revoked = record
+        
         ws.cell(row=row, column=1, value=telegram_id).border = BORDER
         ws.cell(row=row, column=2, value=username or "—").border = BORDER
         ws.cell(row=row, column=3, value=format_datetime(created_at)).border = BORDER
         ws.cell(row=row, column=4, value=payment_count).border = BORDER
+        
+        # Период доступа
+        ws.cell(row=row, column=5, value=format_datetime(starts_at)).border = BORDER
+        expires_cell = ws.cell(row=row, column=6, value=format_datetime(expires_at))
+        expires_cell.border = BORDER
+        
+        # Статус платежа
+        status_cell = ws.cell(row=row, column=7, value=format_status(last_payment_status) if last_payment_status else "—")
+        status_cell.border = BORDER
+        if last_payment_status == "succeeded":
+            status_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        elif last_payment_status == "pending":
+            status_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        elif last_payment_status in ["canceled", "expired"]:
+            status_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        
+        # Статус на канале
+        channel_status = "—"
+        if approved_at:
+            try:
+                expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00')) if expires_at else None
+                if expires_dt and expires_dt.tzinfo is None:
+                    expires_dt = pytz.utc.localize(expires_dt)
+                
+                if expires_dt and expires_dt > now:
+                    # Подписка активна
+                    channel_status = f"✅ Добавлен: {format_datetime(approved_at)}"
+                elif last_link_revoked and expires_dt:
+                    # Забанен (ссылка отозвана и подписка истекла)
+                    channel_status = f"❌ Забанен (примерно): {format_datetime(expires_at)}"
+                else:
+                    # Был добавлен, но статус неясен
+                    channel_status = f"ℹ️ Добавлен: {format_datetime(approved_at)}"
+            except:
+                channel_status = f"ℹ️ Добавлен: {format_datetime(approved_at)}"
+        
+        channel_status_cell = ws.cell(row=row, column=8, value=channel_status)
+        channel_status_cell.border = BORDER
+        if "✅" in channel_status:
+            channel_status_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        elif "❌" in channel_status:
+            channel_status_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        
         row += 1
     
     # Настройка ширины колонок
     ws.column_dimensions['A'].width = 18
     ws.column_dimensions['B'].width = 25
-    ws.column_dimensions['C'].width = 20
+    ws.column_dimensions['C'].width = 22
     ws.column_dimensions['D'].width = 20
+    ws.column_dimensions['E'].width = 22
+    ws.column_dimensions['F'].width = 22
+    ws.column_dimensions['G'].width = 18
+    ws.column_dimensions['H'].width = 35
 
 def create_payments_sheet(wb, conn):
     """Создает лист с платежами"""
