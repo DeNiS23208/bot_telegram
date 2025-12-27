@@ -5,8 +5,8 @@ from datetime import timedelta
 
 # Временные интервалы
 PAYMENT_LINK_VALID_MINUTES = 10  # Срок действия ссылки на оплату
-# ВРЕМЕННО ДЛЯ ТЕСТИРОВАНИЯ: 5 минут для второго этапа тестирования
-SUBSCRIPTION_DAYS = 5 / 1440  # Длительность подписки (5 минут = 5/1440 дней ≈ 0.00347)
+# Длительность подписки
+SUBSCRIPTION_DAYS = 1  # Длительность подписки (1 день)
 SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS = 3  # За сколько дней уведомлять об истечении
 SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS = 24  # Окно для уведомления (часы)
 
