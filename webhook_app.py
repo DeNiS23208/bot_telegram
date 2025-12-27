@@ -1,7 +1,7 @@
 import os
 import aiosqlite
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from fastapi import FastAPI, Request, HTTPException
@@ -811,6 +811,53 @@ async def yookassa_webhook(request: Request):
             
             if tg_user_id:
                 tg_user_id = int(tg_user_id)
+                
+                # ПРОВЕРЯЕМ: когда был создан платеж (если старый - не отправляем сообщение)
+                payment_created_at = None
+                try:
+                    if hasattr(payment, 'created_at'):
+                        payment_created_at = payment.created_at
+                    elif hasattr(payment_obj, 'created_at'):
+                        payment_created_at = payment_obj.created_at
+                    
+                    # Проверяем в БД, когда был создан платеж
+                    if not payment_created_at:
+                        from db import get_active_pending_payment
+                        payment_info = await get_active_pending_payment(tg_user_id, minutes=60)  # Ищем платежи за последний час
+                        if payment_info and payment_info[0] == payment_id:
+                            # Получаем created_at из БД
+                            async with aiosqlite.connect(DB_PATH) as db_conn:
+                                cursor = await db_conn.execute(
+                                    "SELECT created_at FROM payments WHERE payment_id = ?",
+                                    (payment_id,)
+                                )
+                                row = await cursor.fetchone()
+                                if row:
+                                    payment_created_at = row[0]
+                    
+                    # Если платеж старше 20 минут - не отправляем сообщение (это старый платеж)
+                    if payment_created_at:
+                        try:
+                            if isinstance(payment_created_at, str):
+                                created_at_dt = datetime.fromisoformat(payment_created_at.replace('Z', '+00:00'))
+                            else:
+                                created_at_dt = payment_created_at
+                            
+                            if created_at_dt.tzinfo is None:
+                                created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                            
+                            now = datetime.now(timezone.utc)
+                            time_since_creation = (now - created_at_dt).total_seconds() / 60
+                            
+                            if time_since_creation > 20:  # Платеж старше 20 минут
+                                logger.info(f"ℹ️ Платеж {payment_id} отменен, но он был создан {time_since_creation:.1f} минут назад - это старый платеж, уведомление не отправляем")
+                                await update_payment_status_async(payment_id, "canceled")
+                                return {"ok": True, "event": "payment.canceled", "ignored": "old_payment"}
+                        except Exception as e:
+                            logger.warning(f"⚠️ Ошибка проверки времени создания платежа: {e}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка получения времени создания платежа: {e}")
+                
                 # Обновляем статус платежа в БД
                 await update_payment_status_async(payment_id, "canceled")
                 
