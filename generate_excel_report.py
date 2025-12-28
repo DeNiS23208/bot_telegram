@@ -12,6 +12,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
+from config import PAYMENT_AMOUNT_RUB
 
 # Московское время
 MoscowTz = pytz.timezone('Europe/Moscow')
@@ -226,7 +227,7 @@ def create_payments_sheet(wb, conn):
         ws.cell(row=row, column=3, value=username or "—").border = BORDER
         status_cell = ws.cell(row=row, column=4, value=format_status(status))
         status_cell.border = BORDER
-        ws.cell(row=row, column=5, value="1.00").border = BORDER  # Сумма из конфига
+        ws.cell(row=row, column=5, value=PAYMENT_AMOUNT_RUB).border = BORDER  # Сумма из конфига
         ws.cell(row=row, column=6, value=format_datetime(created_at)).border = BORDER
         ws.cell(row=row, column=7, value=format_datetime(processed_at)).border = BORDER
         ws.cell(row=row, column=8, value="Да" if link_created else "Нет").border = BORDER
@@ -430,8 +431,8 @@ def create_summary_sheet(wb, conn):
     ws.cell(row=row, column=2, value=success_payments)
     row += 1
     
-    # Общая сумма (успешные платежи * 1 руб)
-    total_amount = success_payments * 1.00
+    # Общая сумма (успешные платежи * стоимость подписки)
+    total_amount = success_payments * float(PAYMENT_AMOUNT_RUB)
     ws.cell(row=row, column=1, value="Общая сумма (руб):")
     ws.cell(row=row, column=2, value=total_amount)
     row += 1

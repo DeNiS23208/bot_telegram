@@ -653,11 +653,20 @@ async def check_expired_subscriptions():
                                         pass
                                     
                                     # Отправляем уведомление об успешном автопродлении
+                                    # Правильное склонение для рублей
+                                    amount_float = float(PAYMENT_AMOUNT_RUB)
+                                    if amount_float == 1:
+                                        ruble_text = "рубль"
+                                    elif 2 <= amount_float <= 4 or (amount_float % 10 >= 2 and amount_float % 10 <= 4 and amount_float % 100 not in [12, 13, 14]):
+                                        ruble_text = "рубля"
+                                    else:
+                                        ruble_text = "рублей"
+                                    
                                     await safe_send_message(
                                         bot=bot,
                                         chat_id=telegram_id,
                                         text="✅ Доступ автоматически продлен!\n\n"
-                                            f"С вашей карты списано {PAYMENT_AMOUNT_RUB} руб.\n"
+                                            f"С вашей карты списано {PAYMENT_AMOUNT_RUB} {ruble_text}.\n"
                                             f"Доступ продлен на {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}.\n\n"
                                             "Спасибо за использование автопродления!"
                                     )
