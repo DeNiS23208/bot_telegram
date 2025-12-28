@@ -641,20 +641,21 @@ async def pay(message: Message):
 
     await save_payment(message.from_user.id, payment_id, status="pending")
 
-    # Создаем кнопку оплаты с URL
-    pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", url=pay_url)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
-
-    # Формируем сообщение с информацией о подписке
-    # Используем HTML-теги для ссылок, чтобы избежать превью документа от Яндекс Диска
-    # Правильное склонение для рублей
+    # Правильное склонение для рублей (используем один раз для кнопки и сообщения)
     amount_float = float(PAYMENT_AMOUNT_RUB)
     if amount_float == 1:
         ruble_text = "рубль"
+        ruble_text_btn = "1₽"
     elif 2 <= amount_float <= 4 or (amount_float % 10 >= 2 and amount_float % 10 <= 4 and amount_float % 100 not in [12, 13, 14]):
         ruble_text = "рубля"
+        ruble_text_btn = f"{int(amount_float)}₽"
     else:
         ruble_text = "рублей"
+        ruble_text_btn = f"{int(amount_float)}₽"
+    
+    # Создаем кнопку оплаты с URL
+    pay_button = InlineKeyboardButton(text=f"💳 Оплатить {ruble_text_btn}", url=pay_url)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
     
     subscription_text = (
         "💰 <b>Оформление доступа</b>\n\n"
