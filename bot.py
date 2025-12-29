@@ -41,6 +41,25 @@ from config import (
     MAX_ANIMATION_DURATION_SECONDS,
 )
 
+def format_subscription_duration(days: float) -> str:
+    """Форматирует длительность подписки: показывает минуты если < 1 дня, иначе дни"""
+    if days < 1:
+        minutes = int(days * 1440)
+        if minutes == 1:
+            return "1 минута"
+        elif 2 <= minutes <= 4:
+            return f"{minutes} минуты"
+        else:
+            return f"{minutes} минут"
+    else:
+        days_int = int(days)
+        if days_int == 1:
+            return "1 день"
+        elif 2 <= days_int <= 4:
+            return f"{days_int} дня"
+        else:
+            return f"{days_int} дней"
+
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -632,7 +651,7 @@ async def pay(message: Message):
     payment_id, pay_url = await maybe_await(
         create_payment,
         amount_rub=PAYMENT_AMOUNT_RUB,
-        description=f"Доступ к каналу ({SUBSCRIPTION_DAYS} дней)",
+        description=f"Доступ к каналу ({format_subscription_duration(SUBSCRIPTION_DAYS)})",
         return_url=return_url_with_user,
         customer_email=CUSTOMER_EMAIL,
         telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
@@ -659,8 +678,8 @@ async def pay(message: Message):
     
     subscription_text = (
         "💰 <b>Оформление доступа</b>\n\n"
-        f"💎 <b>Стоимость:</b> {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'} — {PAYMENT_AMOUNT_RUB} {ruble_text}\n\n"
-        f"🔄 <b>Автопродление:</b> каждые {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}\n\n"
+        f"💎 <b>Стоимость:</b> {format_subscription_duration(SUBSCRIPTION_DAYS)} — {PAYMENT_AMOUNT_RUB} {ruble_text}\n\n"
+        f"🔄 <b>Автопродление:</b> каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "💳 <b>Сохранение карты:</b>\n"
         "На форме оплаты вам будет предложено сохранить данные карты для автопродления.\n"
@@ -1011,7 +1030,7 @@ async def resume_subscription(message: Message):
             "🔄 Автопродление доступа включено.\n\n"
             f"📅 <b>Доступ действует до:</b> {expires_str}\n"
             f"💳 <b>Следующее списание:</b> {next_payment_str}\n\n"
-            f"✅ Доступ будет автоматически продлеваться каждые {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}.",
+            f"✅ Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.",
             parse_mode="HTML",
             reply_markup=await manage_subscription_menu(user_id)  # Показываем меню с кнопкой "Отменить подписку"
         )
@@ -1059,7 +1078,7 @@ async def resume_subscription(message: Message):
                 "1️⃣ Нажмите кнопку 💳 Получить доступ\n"
                 "2️⃣ При оплате отметьте галочку «Сохранить карту для следующих платежей»\n"
                 "3️⃣ После успешной оплаты нажмите кнопку автопродления ещё раз\n\n"
-                f"💡 После этого доступ будет продлеваться автоматически каждые {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}.",
+                f"💡 После этого доступ будет продлеваться автоматически каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.",
                 parse_mode="HTML",
                 reply_markup=await main_menu(user_id)
             )
@@ -1080,7 +1099,7 @@ async def resume_subscription(message: Message):
                         "✅ <b>Автопродление включено!</b>\n"
                         "━━━━━━━━━━━━━━━━━━━━\n\n"
                         f"📅 <b>Следующее списание:</b> {next_payment_str}\n\n"
-                        f"🔄 Доступ будет автоматически продлеваться каждые {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}.\n\n"
+                        f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                         "💳 Списывание происходит с сохранённой карты автоматически.",
                         parse_mode="HTML",
                         reply_markup=await main_menu(user_id)
@@ -1090,7 +1109,7 @@ async def resume_subscription(message: Message):
                         "━━━━━━━━━━━━━━━━━━━━\n"
                         "✅ <b>Автопродление включено!</b>\n"
                         "━━━━━━━━━━━━━━━━━━━━\n\n"
-                        f"🔄 Доступ будет автоматически продлеваться каждые {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'} при наличии активного доступа.\n\n"
+                        f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)} при наличии активного доступа.\n\n"
                         "💳 Списывание происходит с сохранённой карты автоматически.",
                         parse_mode="HTML",
                         reply_markup=await main_menu(user_id)

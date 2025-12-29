@@ -26,6 +26,25 @@ from config import (
 from db import is_user_allowed, cleanup_old_data
 from telegram_utils import safe_send_message, safe_create_invite_link
 
+def format_subscription_duration(days: float) -> str:
+    """Форматирует длительность подписки: показывает минуты если < 1 дня, иначе дни"""
+    if days < 1:
+        minutes = int(days * 1440)
+        if minutes == 1:
+            return "1 минута"
+        elif 2 <= minutes <= 4:
+            return f"{minutes} минуты"
+        else:
+            return f"{minutes} минут"
+    else:
+        days_int = int(days)
+        if days_int == 1:
+            return "1 день"
+        elif 2 <= days_int <= 4:
+            return f"{days_int} дня"
+        else:
+            return f"{days_int} дней"
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -613,7 +632,7 @@ async def check_expired_subscriptions():
                                 # Создаем автоматический платеж
                                 payment_id, payment_status = create_auto_payment(
                                     amount_rub=PAYMENT_AMOUNT_RUB,
-                                    description=f"Автопродление доступа на канал ({SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'})",
+                                    description=f"Автопродление доступа на канал ({format_subscription_duration(SUBSCRIPTION_DAYS)})",
                                     customer_email=CUSTOMER_EMAIL,
                                     telegram_user_id=telegram_id,
                                     payment_method_id=saved_payment_method_id,
@@ -667,7 +686,7 @@ async def check_expired_subscriptions():
                                         chat_id=telegram_id,
                                         text="✅ Доступ автоматически продлен!\n\n"
                                             f"С вашей карты списано {PAYMENT_AMOUNT_RUB} {ruble_text}.\n"
-                                            f"Доступ продлен на {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}.\n\n"
+                                            f"Доступ продлен на {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                                             "Спасибо за использование автопродления!"
                                     )
                                     logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}")
@@ -1209,7 +1228,7 @@ async def yookassa_webhook(request: Request):
     
     # Активируем подписку (используем SUBSCRIPTION_DAYS из config)
     await activate_subscription(tg_user_id, days=SUBSCRIPTION_DAYS)
-    logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}")
+    logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(SUBSCRIPTION_DAYS)}")
     
     # Проверяем тип платежного метода - для QR-кода и других методов без карты не включаем автопродление
     payment_method_type = None
@@ -1246,7 +1265,7 @@ async def yookassa_webhook(request: Request):
                 chat_id=tg_user_id,
                 text="💳 <b>Карта сохранена для автопродления</b>\n\n"
                     f"✅ Ваша карта сохранена и будет использоваться для автоматического продления доступа.\n\n"
-                    f"🔄 Доступ будет автоматически продлеваться каждые {SUBSCRIPTION_DAYS:.0f} {'день' if SUBSCRIPTION_DAYS == 1 else 'дня' if SUBSCRIPTION_DAYS < 5 else 'дней'}.\n\n"
+                    f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                     "⚠️ <b>Важно:</b> Автопродление может не работать для некоторых карт (особенно Сбербанк).\n"
                     "Рекомендуем карты Тинькофф / Альфа / ВТБ.\n\n"
                     "⚙️ Вы можете отключить автопродление в меню «Управление доступом».",
