@@ -4,8 +4,28 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from yookassa import Configuration, Payment
+from config import SUBSCRIPTION_DAYS
 
 load_dotenv()
+
+def format_subscription_duration(days: float) -> str:
+    """Форматирует длительность подписки: показывает минуты если < 1 дня, иначе дни"""
+    if days < 1:
+        minutes = int(days * 1440)
+        if minutes == 1:
+            return "1 минута"
+        elif 2 <= minutes <= 4:
+            return f"{minutes} минуты"
+        else:
+            return f"{minutes} минут"
+    else:
+        days_int = int(days)
+        if days_int == 1:
+            return "1 день"
+        elif 2 <= days_int <= 4:
+            return f"{days_int} дня"
+        else:
+            return f"{days_int} дней"
 
 # Настройка ЮKassa из .env
 Configuration.account_id = os.getenv("YOOKASSA_SHOP_ID")
@@ -51,7 +71,7 @@ def create_payment(
             "customer": {"email": customer_email},
             "items": [
                 {
-                    "description": "Доступ в закрытый Telegram-канал (30 дней)",
+                    "description": f"Доступ в закрытый Telegram-канал ({format_subscription_duration(SUBSCRIPTION_DAYS)})",
                     "quantity": "1.00",
                     "amount": {"value": amount_rub, "currency": "RUB"},
                     "vat_code": 1,
@@ -130,7 +150,7 @@ def create_auto_payment(
             "customer": {"email": customer_email},
             "items": [
                 {
-                    "description": "Автопродление подписки на закрытый Telegram-канал (30 дней)",
+                    "description": f"Автопродление подписки на закрытый Telegram-канал ({format_subscription_duration(SUBSCRIPTION_DAYS)})",
                     "quantity": "1.00",
                     "amount": {"value": amount_rub, "currency": "RUB"},
                     "vat_code": 1,
