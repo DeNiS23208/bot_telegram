@@ -1603,8 +1603,8 @@ async def yookassa_webhook(request: Request):
                 if chat.invite_link:
                     invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                    else:
-                        raise Exception("У канала нет основной ссылки")
+                else:
+                    raise Exception("У канала нет основной ссылки")
                 except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
                     raise e3
