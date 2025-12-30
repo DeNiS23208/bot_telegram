@@ -1,6 +1,5 @@
 import os
 import aiosqlite
-import logging
 from datetime import datetime, timedelta
 from typing import Optional
 from dotenv import load_dotenv
@@ -47,8 +46,8 @@ async def init_db() -> None:
                 telegram_id INTEGER PRIMARY KEY,
                 username TEXT,
                 created_at TEXT NOT NULL
-                         )
-                         """)
+            )
+        """)
         
         await db.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -59,8 +58,8 @@ async def init_db() -> None:
                 saved_payment_method_id TEXT,
                 subscription_expired_notified INTEGER DEFAULT 0,
                 FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
-                             )
-                         """)
+            )
+        """)
         
         # Добавляем колонку subscription_expired_notified, если её нет
         try:
@@ -76,9 +75,9 @@ async def init_db() -> None:
                 payment_id TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL
-                         )
-                         """)
-
+            )
+        """)
+        
         # Создаем индексы для оптимизации запросов
         await db.execute("CREATE INDEX IF NOT EXISTS idx_payments_telegram_id ON payments(telegram_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)")
@@ -103,7 +102,7 @@ async def ensure_user(telegram_id: int, username: Optional[str]) -> None:
             (telegram_id, username, datetime.utcnow().isoformat())
         )
         await db.commit()
-    _set_cached(cache_key, True)
+        _set_cached(cache_key, True)
 
 
 async def get_subscription_expires_at(telegram_id: int) -> Optional[datetime]:
@@ -119,10 +118,10 @@ async def get_subscription_expires_at(telegram_id: int) -> Optional[datetime]:
             (telegram_id,)
         )
         row = await cur.fetchone()
-
+    
     if not row or not row[0]:
         return None
-
+    
     try:
         result = datetime.fromisoformat(row[0])
         _set_cached(cache_key, result)
@@ -144,10 +143,10 @@ async def get_subscription_starts_at(telegram_id: int) -> Optional[datetime]:
             (telegram_id,)
         )
         row = await cur.fetchone()
-
+    
     if not row or not row[0]:
         return None
-
+    
     try:
         result = datetime.fromisoformat(row[0])
         _set_cached(cache_key, result)
@@ -519,4 +518,5 @@ async def cleanup_old_data():
     total_deleted += await cleanup_old_processed_payments(days=90)
     logger.info(f"✅ Очистка завершена, удалено {total_deleted} записей")
     return total_deleted
+
 

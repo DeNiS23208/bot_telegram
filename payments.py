@@ -3,7 +3,7 @@ import uuid
 from typing import Optional
 
 from dotenv import load_dotenv
-from yookassa import Configuration, Payment
+from yookassa import Configuration, Payment, Refund
 from config import SUBSCRIPTION_DAYS
 
 load_dotenv()
@@ -164,7 +164,17 @@ def create_auto_payment(
     try:
         payment = Payment.create(payload, idempotence_key)
         # Логируем детали для отладки
-        print(f"🔍 Создан автоплатеж: payment_id={payment.id}, status={payment.status}, payment_method_id={payment_method_id}")
+        payment_method_type = None
+        try:
+            if hasattr(payment, 'payment_method') and payment.payment_method:
+                pm = payment.payment_method
+                if hasattr(pm, 'type'):
+                    payment_method_type = pm.type
+                elif isinstance(pm, dict) and 'type' in pm:
+                    payment_method_type = pm['type']
+        except Exception:
+            pass
+        print(f"🔍 Создан автоплатеж: payment_id={payment.id}, status={payment.status}, payment_method_id={payment_method_id}, тип: {payment_method_type}")
         if hasattr(payment, 'cancellation_details') and payment.cancellation_details:
             cd = payment.cancellation_details
             party = getattr(cd, 'party', None) if hasattr(cd, 'party') else None
@@ -178,4 +188,76 @@ def create_auto_payment(
         import traceback
         traceback.print_exc()
         raise
+
+
+def create_refund(
+    payment_id: str,
+    amount_rub: Optional[str] = None,
+    description: Optional[str] = None,
+) -> tuple[str, str]:
+    """
+    Создает возврат средств для платежа
+    
+    Args:
+        payment_id: ID платежа, для которого создается возврат
+        amount_rub: Сумма возврата (если None, возвращается полная сумма платежа)
+        description: Описание возврата (опционально)
+    
+    Returns:
+        tuple[str, str]: (refund_id, status) - ID возврата и его статус
+    
+    ВАЖНО: 
+    - Возвраты работают для всех типов платежей (SberPay, СБП, банковская карта)
+    - Если amount_rub не указан, возвращается полная сумма платежа
+    - Возврат можно создать только для успешных платежей (status=succeeded)
+    """
+    import uuid
+    idempotence_key = str(uuid.uuid4())
+    
+    # Получаем информацию о платеже
+    try:
+        payment = Payment.find_one(payment_id)
+    except Exception as e:
+        raise ValueError(f"Не удалось найти платеж {payment_id}: {e}")
+    
+    # Проверяем, что платеж успешен
+    if payment.status != "succeeded":
+        raise ValueError(f"Нельзя создать возврат для платежа со статусом {payment.status}. Требуется статус 'succeeded'")
+    
+    # Получаем сумму платежа, если amount_rub не указан
+    if amount_rub is None:
+        if hasattr(payment.amount, 'value'):
+            amount_rub = payment.amount.value
+        elif isinstance(payment.amount, dict):
+            amount_rub = payment.amount.get('value')
+        else:
+            raise ValueError("Не удалось определить сумму платежа")
+    
+    # Формируем payload для возврата
+    payload = {
+        "amount": {"value": amount_rub, "currency": "RUB"},
+        "payment_id": payment_id,
+    }
+    
+    if description:
+        payload["description"] = description
+    
+    try:
+        refund = Refund.create(payload, idempotence_key)
+        print(f"✅ Создан возврат: refund_id={refund.id}, payment_id={payment_id}, amount={amount_rub}, status={refund.status}")
+        return refund.id, refund.status
+    except Exception as e:
+        print(f"❌ Ошибка создания возврата для платежа {payment_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def get_refund_status(refund_id: str) -> str:
+    """Получает статус возврата по его ID"""
+    try:
+        refund = Refund.find_one(refund_id)
+        return refund.status
+    except Exception as e:
+        raise ValueError(f"Не удалось найти возврат {refund_id}: {e}")
 
