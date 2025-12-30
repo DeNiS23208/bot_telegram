@@ -267,7 +267,7 @@ async def cmd_start(message: Message):
         )
     else:
         # Обычный текст для продакшн режима
-        welcome_text = (
+    welcome_text = (
         "👋 <b>Добро пожаловать!</b>\n\n"
         "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
         "🎯 Здесь вы можете:\n"
@@ -720,8 +720,7 @@ async def bonus_week_info(message: Message):
     
     # Создаем кнопки: оплата и назад в меню
     pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", callback_data="bonus_week_pay")
-    back_button = InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_bonus_menu")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button], [back_button]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
     
     await message.answer(
         bonus_text,
@@ -1021,16 +1020,16 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✅ <b>Оплата подтверждена!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Оплата подтверждена!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
                 parse_mode="HTML"
             )
         else:
@@ -1247,18 +1246,14 @@ async def manage_subscription(message: Message):
                 # Показываем кнопку отключения автопродления
                 keyboard = ReplyKeyboardMarkup(
                     keyboard=[
-                        [KeyboardButton(text=BTN_DISABLE_AUTO_RENEWAL)],
-                        [KeyboardButton(text=BTN_BACK_TO_MENU)]
+                        [KeyboardButton(text=BTN_DISABLE_AUTO_RENEWAL)]
                     ],
                     resize_keyboard=True
                 )
             else:
-                # Только кнопка назад
-                keyboard = ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text=BTN_BACK_TO_MENU)]],
-                    resize_keyboard=True
-                )
-                await message.answer(
+                # Нет кнопок - используем основное меню
+                keyboard = await bonus_week_menu()
+    await message.answer(
                     management_text,
                     parse_mode="HTML",
                     reply_markup=keyboard
@@ -1288,7 +1283,7 @@ async def back_to_main_menu(message: Message):
         reply_markup=await bonus_week_menu()
     )
     else:
-        await message.answer(
+    await message.answer(
         "📋 <b>Главное меню</b>",
         parse_mode="HTML",
         reply_markup=await main_menu(message.from_user.id)
@@ -1394,12 +1389,8 @@ async def cancel_subscription(message: Message):
     expires_str = format_datetime_moscow(expires_at)
     
     # Показываем обновленное меню управления БЕЗ кнопки "Возобновить подписку" (так как карта удалена)
-    # Создаем меню только с кнопкой "Назад в меню"
-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-    back_keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="◀️ Назад в меню")]],
-        resize_keyboard=True
-    )
+    # Используем основное меню бонусной недели
+    back_keyboard = await bonus_week_menu()
     
     # Получаем обновленное главное меню (теперь должно показывать "Получить доступ")
     updated_menu = await main_menu(user_id)
@@ -1605,12 +1596,12 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # 1. Пользователь является владельцем ссылки
             # 2. У владельца есть активная подписка
             if link_owner_id and link_owner_id == user_id and has_active_subscription:
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-            else:
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+        else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
