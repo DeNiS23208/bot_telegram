@@ -617,6 +617,7 @@ async def check_bonus_week_ending_soon():
             minutes_until_end = time_until_end.total_seconds() / 60
             
             # Проверяем, нужно ли отправлять уведомление (за vremya_sms минут до окончания)
+            # Используем погрешность ±1 минута для надежности
             if vremya_sms - 1 <= minutes_until_end <= vremya_sms + 1:
                 for telegram_id, expires_at_str in active_subs:
                     if telegram_id in notified_users:
@@ -1379,6 +1380,28 @@ async def yookassa_webhook(request: Request):
         return {"ok": True, "ignored": "no telegram_user_id"}
 
     tg_user_id = int(tg_user_id)
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: убеждаемся, что это не ID бота
+    # ID бота обычно начинается с определенных цифр или равен определенному формату
+    # Проверяем, что это разумный ID пользователя (обычно 9-10 цифр, начинается не с 0)
+    if str(tg_user_id).startswith('0') or len(str(tg_user_id)) < 6:
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Подозрительный telegram_user_id из метаданных: {tg_user_id} для платежа {payment_id}")
+        # Пытаемся получить правильный ID из БД
+        async with aiosqlite.connect(DB_PATH) as db_conn:
+            cursor = await db_conn.execute(
+                "SELECT telegram_id FROM payments WHERE payment_id = ?",
+                (payment_id,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                tg_user_id = int(row[0])
+                logger.info(f"✅ Используем telegram_id из БД: {tg_user_id}")
+            else:
+                logger.error(f"❌ Не удалось найти правильный telegram_id для платежа {payment_id}")
+                await mark_processed(payment_id)
+                return {"ok": True, "ignored": "invalid telegram_user_id"}
+    
+    logger.info(f"🔍 Используемый telegram_user_id для отправки сообщения: {tg_user_id}")
 
     # Еще раз проверяем статус перед активацией подписки (на случай если изменился)
     payment_refresh = Payment.find_one(payment_id)
