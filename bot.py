@@ -1106,7 +1106,8 @@ async def manage_subscription(message: Message):
     
     # Проверяем, есть ли активная подписка
     expires_at = await get_subscription_expires_at(user_id)
-    now = datetime.utcnow()
+    from datetime import timezone
+    now = datetime.now(timezone.utc)  # Используем timezone-aware datetime для правильного расчета
     
     if not expires_at or expires_at <= now:
         await message.answer(
@@ -1130,10 +1131,12 @@ async def manage_subscription(message: Message):
     is_bonus = is_bonus_week_active()
     bonus_week_end = get_bonus_week_end()
     
-    # Вычисляем остаток времени до окончания бонусной недели
+    # Вычисляем остаток времени до окончания бонусной недели (в реальном времени)
     if is_bonus and expires_at <= bonus_week_end:
         # Это подписка из бонусной недели
-        time_until_bonus_end = bonus_week_end - now
+        # ВАЖНО: Используем текущее время для расчета оставшегося времени
+        now_real = datetime.now(timezone.utc)  # Получаем актуальное время каждый раз
+        time_until_bonus_end = bonus_week_end - now_real
         if time_until_bonus_end.total_seconds() > 0:
             days_left = time_until_bonus_end.days
             hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
