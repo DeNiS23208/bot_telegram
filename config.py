@@ -33,7 +33,7 @@ BONUS_WEEK_START_DATE = datetime(2025, 1, 5, 0, 0, 0, tzinfo=timezone.utc)  # Н
 BONUS_WEEK_END_DATE = datetime(2025, 1, 12, 23, 59, 59, tzinfo=timezone.utc)  # Конец бонусной недели (12 января)
 
 # Переменные для тестирования (в минутах)
-dni_prazdnika = 10  # Длительность бонусной недели в минутах (для теста: 10 минут)
+dni_prazdnika = 5  # Длительность бонусной недели в минутах (для теста: 5 минут)
 vremya_sms = 2  # Время уведомления до окончания в минутах (для теста: 2 минуты)
 
 # Фиксированное время начала бонусной недели для теста (устанавливается при первом импорте)
@@ -48,15 +48,17 @@ BONUS_WEEK_PRICE_RUB = "1.00"  # Цена бонусной недели
 BONUS_WEEK_DURATION_MINUTES = dni_prazdnika  # Длительность в минутах
 
 # Продакшн значения (после окончания бонусной недели)
-PRODUCTION_PRICE_RUB = "2990.00"  # Обычная цена подписки
-PRODUCTION_DURATION_DAYS = 30  # Обычная длительность подписки
+# Для теста: 5 минут, 1 рубль
+# Для продакшна: 30 дней, 2990 рублей
+PRODUCTION_PRICE_RUB = "1.00"  # Тестовая цена подписки (для продакшна: "2990.00")
+PRODUCTION_DURATION_DAYS = 5 / (24 * 60)  # Тестовая длительность: 5 минут в днях (для продакшна: 30)
 
 # ================== ФУНКЦИИ ДЛЯ ОПРЕДЕЛЕНИЯ РЕЖИМА ==================
 def is_bonus_week_active() -> bool:
     """Проверяет, активна ли сейчас бонусная неделя"""
     # Для теста: используем фиксированное время начала (устанавливается при первом вызове)
     # Для продакшена: используем фиксированные даты
-    USE_TEST_MODE = False  # False = продакшн режим (бонусная неделя с 5 по 12 января)
+    USE_TEST_MODE = True  # True = тестовый режим (False = продакшн режим с 5 по 12 января)
     
     if USE_TEST_MODE:
         # Тестовый режим: бонусная неделя начинается с момента первого вызова и длится dni_prazdnika минут
@@ -76,7 +78,7 @@ def is_bonus_week_active() -> bool:
 
 def get_bonus_week_start() -> datetime:
     """Возвращает время начала бонусной недели"""
-    USE_TEST_MODE = False  # False = продакшн режим
+    USE_TEST_MODE = True  # True = тестовый режим
     if USE_TEST_MODE:
         global _BONUS_WEEK_TEST_START
         if _BONUS_WEEK_TEST_START is None:
@@ -87,7 +89,7 @@ def get_bonus_week_start() -> datetime:
 
 def get_bonus_week_end() -> datetime:
     """Возвращает время окончания бонусной недели"""
-    USE_TEST_MODE = False  # False = продакшн режим
+    USE_TEST_MODE = True  # True = тестовый режим
     if USE_TEST_MODE:
         return get_bonus_week_start() + timedelta(minutes=dni_prazdnika)
     else:
