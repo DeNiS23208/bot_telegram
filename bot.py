@@ -1258,13 +1258,12 @@ async def manage_subscription(message: Message):
                     keyboard=[[KeyboardButton(text=BTN_BACK_TO_MENU)]],
                     resize_keyboard=True
                 )
-            
-    await message.answer(
-                management_text,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
-            return
+                await message.answer(
+                    management_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                return
     
     # Обычное управление доступом (продакшн режим)
     await message.answer(
