@@ -224,7 +224,27 @@ async def cmd_start(message: Message):
     # Текст приветственного сообщения
     if is_bonus_week_active():
         # Текст для бонусной недели
-        bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+        # Вычисляем реальное оставшееся время до конца бонусной недели
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        bonus_end = get_bonus_week_end()
+        time_until_bonus_end = bonus_end - now
+        
+        # Форматируем оставшееся время
+        if time_until_bonus_end.total_seconds() > 0:
+            days_left = time_until_bonus_end.days
+            hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
+            minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
+            
+            if days_left > 0:
+                time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+            elif hours_left > 0:
+                time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+            else:
+                time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+        else:
+            time_left_text = "завершилась"
+        
         welcome_text = (
             "👋 <b>Добро пожаловать!</b>\n\n"
             "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
@@ -232,7 +252,7 @@ async def cmd_start(message: Message):
             f"🎁 В честь открытия канала Наиля Хасанова мы дарим вам <b>бонусную неделю</b>!\n\n"
             f"💰 <b>Специальное предложение:</b>\n"
             f"• Доступ к закрытому каналу всего за <b>1 рубль</b>\n"
-            f"• Бонусная неделя длится: <b>{bonus_duration_text}</b>\n"
+            f"• До окончания бонусной недели осталось: <b>{time_left_text}</b>\n"
             f"• Доступ будет действовать до окончания бонусной недели\n\n"
             f"🔄 <b>После окончания бонусной недели:</b>\n"
             f"• Произойдет автоматическое продление на полную стоимость доступа\n"
@@ -655,15 +675,34 @@ async def bonus_week_info(message: Message):
         )
         return
     
-    # Форматируем длительность бонусной недели
-    bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+    # Вычисляем реальное оставшееся время до конца бонусной недели
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    bonus_end = get_bonus_week_end()
+    time_until_bonus_end = bonus_end - now
+    
+    # Форматируем оставшееся время
+    if time_until_bonus_end.total_seconds() > 0:
+        days_left = time_until_bonus_end.days
+        hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
+        minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
+        
+        if days_left > 0:
+            time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+        elif hours_left > 0:
+            time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+        else:
+            time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+    else:
+        time_left_text = "завершилась"
     
     bonus_text = (
         "🎉 <b>БОНУСНАЯ НЕДЕЛЯ В ЧЕСТЬ ЗАПУСКА КАНАЛА!</b>\n\n"
         "🎁 В честь открытия канала Наиля Хасанова мы дарим вам <b>бонусную неделю</b>!\n\n"
         "💰 <b>Специальное предложение:</b>\n"
         f"• Доступ к закрытому каналу всего за <b>1 рубль</b>\n"
-        f"• Срок доступа: <b>{bonus_duration_text}</b>\n\n"
+        f"• До окончания бонусной недели осталось: <b>{time_left_text}</b>\n"
+        f"• Доступ будет действовать до окончания бонусной недели\n\n"
         "🔄 <b>После окончания бонусной недели:</b>\n"
         "• Произойдет автоматическое продление на полную стоимость доступа\n"
         "• Стоимость: <b>2990 рублей</b>\n"
