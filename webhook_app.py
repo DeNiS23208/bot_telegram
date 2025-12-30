@@ -1736,8 +1736,8 @@ async def yookassa_webhook(request: Request):
                 chat_id=tg_user_id,
                 text=notification_text,
                 parse_mode="HTML",
-            reply_markup=menu
-        )
+                reply_markup=menu
+            )
             logger.info(f"✅ Сообщение об успешной оплате отправлено пользователю {tg_user_id}")
         except Exception as send_error:
             logger.error(f"❌ Ошибка отправки сообщения об успешной оплате пользователю {tg_user_id}: {send_error}")

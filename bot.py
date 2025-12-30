@@ -267,7 +267,7 @@ async def cmd_start(message: Message):
         )
     else:
         # Обычный текст для продакшн режима
-        welcome_text = (
+    welcome_text = (
         "👋 <b>Добро пожаловать!</b>\n\n"
         "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
         "🎯 Здесь вы можете:\n"
@@ -859,11 +859,15 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
         "🎁 После оплаты вы получите доступ к закрытому каналу"
     )
     
-    # Если это callback, редактируем исходное сообщение БЕЗ изменения текста и клавиатуры
-    # Просто обновляем URL кнопки оплаты
+    # Если это callback, редактируем исходное сообщение с новым текстом и кнопкой
     if is_callback:
         try:
-            await message.edit_reply_markup(reply_markup=keyboard)
+            await message.edit_text(
+                subscription_text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
         except Exception as e:
             # Если не удалось отредактировать, отправляем новое сообщение
             await message.answer(
@@ -1020,9 +1024,9 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
             "━━━━━━━━━━━━━━━━━━━━\n"
             "✅ <b>Оплата подтверждена!</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1254,7 +1258,7 @@ async def manage_subscription(message: Message):
                 # Нет кнопок - используем основное меню
                 keyboard = await bonus_week_menu()
             
-            await message.answer(
+    await message.answer(
                 management_text,
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -1284,7 +1288,7 @@ async def back_to_main_menu(message: Message):
         reply_markup=await bonus_week_menu()
     )
     else:
-        await message.answer(
+    await message.answer(
         "📋 <b>Главное меню</b>",
         parse_mode="HTML",
         reply_markup=await main_menu(message.from_user.id)
@@ -1597,12 +1601,12 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # 1. Пользователь является владельцем ссылки
             # 2. У владельца есть активная подписка
             if link_owner_id and link_owner_id == user_id and has_active_subscription:
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-            else:
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+        else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
