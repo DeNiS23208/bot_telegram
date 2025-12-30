@@ -1253,12 +1253,13 @@ async def manage_subscription(message: Message):
             else:
                 # Нет кнопок - используем основное меню
                 keyboard = await bonus_week_menu()
-    await message.answer(
-                    management_text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
-                return
+            
+            await message.answer(
+                management_text,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            return
     
     # Обычное управление доступом (продакшн режим)
     await message.answer(
