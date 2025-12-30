@@ -398,6 +398,18 @@ async def set_subscription_expired_notified(telegram_id: int, notified: bool = T
         _clear_cache()
 
 
+async def get_all_active_subscriptions() -> list[tuple[int, str]]:
+    """Получает все активные подписки (telegram_id, expires_at)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.utcnow().isoformat()
+        cur = await db.execute(
+            "SELECT telegram_id, expires_at FROM subscriptions WHERE expires_at > ?",
+            (now,)
+        )
+        rows = await cur.fetchall()
+    return [(row[0], row[1]) for row in rows]
+
+
 async def get_subscription_expired_notified(telegram_id: int) -> bool:
     """Проверяет, было ли отправлено уведомление об истечении подписки"""
     async with aiosqlite.connect(DB_PATH) as db:
