@@ -1285,10 +1285,10 @@ async def back_to_main_menu(message: Message):
         await message.answer(
             "📋 <b>Главное меню</b>",
             parse_mode="HTML",
-            reply_markup=await bonus_week_menu()
-        )
+        reply_markup=await bonus_week_menu()
+    )
     else:
-    await message.answer(
+        await message.answer(
         "📋 <b>Главное меню</b>",
         parse_mode="HTML",
         reply_markup=await main_menu(message.from_user.id)
