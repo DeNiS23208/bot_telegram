@@ -1539,7 +1539,7 @@ async def approve_join_request(join_request: ChatJoinRequest):
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
                 except Exception as e:
                     print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-        else:
+            else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
