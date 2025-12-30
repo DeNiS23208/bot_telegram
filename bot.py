@@ -807,8 +807,7 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
         
         if pay_url:
             pay_button = InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)
-            back_button = InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_bonus_menu")
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button], [back_button]])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
             await message.answer(
                 f"⏳ <b>У вас уже есть активная ссылка на оплату</b>\n\n"
                 "Нажмите на кнопку ниже, чтобы перейти к оплате:\n\n"
