@@ -689,7 +689,9 @@ async def bonus_week_info(message: Message):
 async def bonus_week_pay_callback(callback: CallbackQuery):
     """Обработчик нажатия на кнопку оплаты в бонусной неделе"""
     await callback.answer()
-    await bonus_week_pay(callback.message)
+    # Используем callback.message для редактирования исходного сообщения
+    # и передаем флаг, что это callback, чтобы не дублировать сообщения
+    await bonus_week_pay(callback.message, is_callback=True)
 
 
 @dp.callback_query(lambda c: c.data == "back_to_bonus_menu")
