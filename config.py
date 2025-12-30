@@ -1,7 +1,7 @@
 """
 Конфигурация и константы бота
 """
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 # Временные интервалы
 PAYMENT_LINK_VALID_MINUTES = 10  # Срок действия ссылки на оплату
@@ -25,4 +25,92 @@ MAX_ANIMATION_DURATION_SECONDS = 20  # Максимальная длительн
 
 # Сумма платежа
 PAYMENT_AMOUNT_RUB = "2990.00"  # Сумма платежа в рублях (продакшн режим)
+
+# ================== БОНУСНАЯ НЕДЕЛЯ ==================
+# Для продакшена: с 5 января по 12 января 2025
+# Для теста: используем переменные для быстрой проверки
+BONUS_WEEK_START_DATE = datetime(2025, 1, 5, 0, 0, 0, tzinfo=timezone.utc)  # Начало бонусной недели (5 января)
+BONUS_WEEK_END_DATE = datetime(2025, 1, 12, 23, 59, 59, tzinfo=timezone.utc)  # Конец бонусной недели (12 января)
+
+# Переменные для тестирования (в минутах)
+dni_prazdnika = 10  # Длительность бонусной недели в минутах (для теста: 10 минут)
+vremya_sms = 2  # Время уведомления до окончания в минутах (для теста: 2 минуты)
+
+# Фиксированное время начала бонусной недели для теста (устанавливается при первом импорте)
+_BONUS_WEEK_TEST_START = None
+
+# Для продакшена (после теста):
+# dni_prazdnika = 7 * 24 * 60  # 7 дней в минутах
+# vremya_sms = 2 * 60  # 2 часа в минутах
+
+# Цены и длительность бонусной недели
+BONUS_WEEK_PRICE_RUB = "1.00"  # Цена бонусной недели
+BONUS_WEEK_DURATION_MINUTES = dni_prazdnika  # Длительность в минутах
+
+# Продакшн значения (после окончания бонусной недели)
+PRODUCTION_PRICE_RUB = "2990.00"  # Обычная цена подписки
+PRODUCTION_DURATION_DAYS = 30  # Обычная длительность подписки
+
+# ================== ФУНКЦИИ ДЛЯ ОПРЕДЕЛЕНИЯ РЕЖИМА ==================
+def is_bonus_week_active() -> bool:
+    """Проверяет, активна ли сейчас бонусная неделя"""
+    # Для теста: используем фиксированное время начала (устанавливается при первом вызове)
+    # Для продакшена: используем фиксированные даты
+    USE_TEST_MODE = True  # Переключить на False для продакшена
+    
+    if USE_TEST_MODE:
+        # Тестовый режим: бонусная неделя начинается с момента первого вызова и длится dni_prazdnika минут
+        global _BONUS_WEEK_TEST_START
+        now = datetime.now(timezone.utc)
+        
+        # Если начало еще не установлено, устанавливаем его сейчас
+        if _BONUS_WEEK_TEST_START is None:
+            _BONUS_WEEK_TEST_START = now
+        
+        test_end = _BONUS_WEEK_TEST_START + timedelta(minutes=dni_prazdnika)
+        return _BONUS_WEEK_TEST_START <= now < test_end
+    else:
+        # Продакшн режим: используем фиксированные даты
+        now = datetime.now(timezone.utc)
+        return BONUS_WEEK_START_DATE <= now <= BONUS_WEEK_END_DATE
+
+def get_bonus_week_start() -> datetime:
+    """Возвращает время начала бонусной недели"""
+    USE_TEST_MODE = True
+    if USE_TEST_MODE:
+        global _BONUS_WEEK_TEST_START
+        if _BONUS_WEEK_TEST_START is None:
+            _BONUS_WEEK_TEST_START = datetime.now(timezone.utc)
+        return _BONUS_WEEK_TEST_START
+    else:
+        return BONUS_WEEK_START_DATE
+
+def get_bonus_week_end() -> datetime:
+    """Возвращает время окончания бонусной недели"""
+    USE_TEST_MODE = True
+    if USE_TEST_MODE:
+        return get_bonus_week_start() + timedelta(minutes=dni_prazdnika)
+    else:
+        return BONUS_WEEK_END_DATE
+
+def get_current_subscription_price() -> str:
+    """Возвращает текущую цену подписки в зависимости от режима"""
+    return BONUS_WEEK_PRICE_RUB if is_bonus_week_active() else PRODUCTION_PRICE_RUB
+
+def get_current_subscription_duration() -> float:
+    """Возвращает текущую длительность подписки в зависимости от режима"""
+    if is_bonus_week_active():
+        # Бонусная неделя: возвращаем в днях (минуты / 1440)
+        return dni_prazdnika / 1440
+    else:
+        # Продакшн: 30 дней
+        return PRODUCTION_DURATION_DAYS
+
+def get_production_subscription_price() -> str:
+    """Возвращает цену продакшн подписки (для автопродления после бонусной недели)"""
+    return PRODUCTION_PRICE_RUB
+
+def get_production_subscription_duration() -> float:
+    """Возвращает длительность продакшн подписки (для автопродления после бонусной недели)"""
+    return PRODUCTION_DURATION_DAYS
 

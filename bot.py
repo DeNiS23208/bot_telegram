@@ -39,6 +39,15 @@ from config import (
     MAX_VIDEO_SIZE_MB,
     MAX_ANIMATION_SIZE_MB,
     MAX_ANIMATION_DURATION_SECONDS,
+    is_bonus_week_active,
+    get_current_subscription_price,
+    get_current_subscription_duration,
+    get_production_subscription_price,
+    get_production_subscription_duration,
+    get_bonus_week_end,
+    dni_prazdnika,
+    vremya_sms,
+    BONUS_WEEK_PRICE_RUB,
 )
 
 def format_subscription_duration(days: float) -> str:
@@ -94,9 +103,30 @@ BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "🔍 Проверить оплату"
 BTN_SUPPORT = "💬 Поддержка"
 
+# Кнопки для бонусной недели
+BTN_BONUS_WEEK = "🎁 Бонус в честь запуск канала Наиля Хасанова"
+BTN_BACK_TO_MENU = "◀️ Назад в меню"
+BTN_DISABLE_AUTO_RENEWAL = "❌ Отказаться от автопродления"
+
+
+async def bonus_week_menu() -> ReplyKeyboardMarkup:
+    """Создает меню для бонусной недели"""
+    keyboard = [
+        [KeyboardButton(text=BTN_BONUS_WEEK)],
+        [KeyboardButton(text=BTN_ABOUT_1)],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+    )
+
 
 async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     """Создает главное меню с учетом статуса доступа"""
+    # Если активна бонусная неделя, показываем специальное меню
+    if is_bonus_week_active():
+        return await bonus_week_menu()
+    
     # Определяем, какая кнопка показывается: "Получить доступ" или "Управление доступом"
     if telegram_id:
         expires_at = await get_subscription_expires_at(telegram_id)
@@ -192,15 +222,34 @@ async def cmd_start(message: Message):
     # Приоритет: сначала пробуем локальный файл (быстрее), потом URL
     
     # Текст приветственного сообщения
-    welcome_text = (
-        "👋 <b>Добро пожаловать!</b>\n\n"
-        "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
-        "🎯 Здесь вы можете:\n"
-        "• Получить доступ к закрытому каналу\n"
-        "• Управлять своим доступом\n"
-        "• Настроить автопродление\n\n"
-        "Выберите действие в меню ниже 👇"
-    )
+    if is_bonus_week_active():
+        # Текст для бонусной недели
+        bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+        welcome_text = (
+            "👋 <b>Добро пожаловать!</b>\n\n"
+            "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
+            "🎉 <b>БОНУСНАЯ НЕДЕЛЯ В ЧЕСТЬ ЗАПУСКА КАНАЛА!</b>\n\n"
+            f"🎁 В честь открытия канала мы дарим вам <b>бонусную неделю</b>!\n\n"
+            f"💰 <b>Специальное предложение:</b>\n"
+            f"• Доступ к закрытому каналу всего за <b>1 рубль</b>\n"
+            f"• Срок доступа: <b>{bonus_duration_text}</b>\n\n"
+            f"🔄 <b>После окончания бонусной недели:</b>\n"
+            f"• Автоматическое продление на полную стоимость: <b>2990 рублей на 30 дней</b>\n"
+            f"• Автопродление можно отключить в любой момент\n\n"
+            f"⏰ <b>Бонусная неделя действует ограниченное время!</b>\n\n"
+            "Выберите действие в меню ниже 👇"
+        )
+    else:
+        # Обычный текст для продакшн режима
+        welcome_text = (
+            "👋 <b>Добро пожаловать!</b>\n\n"
+            "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
+            "🎯 Здесь вы можете:\n"
+            "• Получить доступ к закрытому каналу\n"
+            "• Управлять своим доступом\n"
+            "• Настроить автопродление\n\n"
+            "Выберите действие в меню ниже 👇"
+        )
     
     # Отправляем видео с текстом в caption (встроено в сообщение)
     video_sent = False
@@ -582,7 +631,185 @@ async def about(message: Message):
         "• Простая оплата\n"
         "• Автопродление доступа\n"
         "• Мгновенный доступ к контенту",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=await main_menu(message.from_user.id) if not is_bonus_week_active() else await bonus_week_menu()
+    )
+
+
+@dp.message(lambda m: (m.text or "").strip() == BTN_BONUS_WEEK)
+async def bonus_week_info(message: Message):
+    """Обработчик кнопки 'Бонус в честь запуск канала Наиля Хасанова'"""
+    await ensure_user(message.from_user.id, message.from_user.username)
+    await send_typing_action(message.chat.id)
+    
+    if not is_bonus_week_active():
+        # Если бонусная неделя закончилась, показываем обычное меню
+        await message.answer(
+            "ℹ️ <b>Бонусная неделя закончилась</b>\n\n"
+            "Бонусное предложение больше не доступно. Вы можете получить доступ по обычной стоимости.",
+            parse_mode="HTML",
+            reply_markup=await main_menu(message.from_user.id)
+        )
+        return
+    
+    # Форматируем длительность бонусной недели
+    bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+    
+    bonus_text = (
+        "🎉 <b>БОНУСНАЯ НЕДЕЛЯ В ЧЕСТЬ ЗАПУСКА КАНАЛА!</b>\n\n"
+        "🎁 В честь открытия канала Наиля Хасанова мы дарим вам <b>бонусную неделю</b>!\n\n"
+        "💰 <b>Специальное предложение:</b>\n"
+        f"• Доступ к закрытому каналу всего за <b>1 рубль</b>\n"
+        f"• Срок доступа: <b>{bonus_duration_text}</b>\n\n"
+        "🔄 <b>После окончания бонусной недели:</b>\n"
+        "• Произойдет автоматическое продление на полную стоимость доступа\n"
+        "• Стоимость: <b>2990 рублей</b>\n"
+        "• Срок доступа: <b>30 дней</b>\n\n"
+        "⚙️ <b>Важно:</b> Автопродление можно будет отключить в любой момент в меню «Управление доступом».\n\n"
+        "⏰ <b>Бонусная неделя действует ограниченное время!</b>\n\n"
+        "Нажмите кнопку ниже, чтобы получить доступ за 1 рубль 👇"
+    )
+    
+    # Создаем кнопки: оплата и назад в меню
+    pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", callback_data="bonus_week_pay")
+    back_button = InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_bonus_menu")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button], [back_button]])
+    
+    await message.answer(
+        bonus_text,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+@dp.callback_query(lambda c: c.data == "bonus_week_pay")
+async def bonus_week_pay_callback(callback: CallbackQuery):
+    """Обработчик нажатия на кнопку оплаты в бонусной неделе"""
+    await callback.answer()
+    await bonus_week_pay(callback.message)
+
+
+@dp.callback_query(lambda c: c.data == "back_to_bonus_menu")
+async def back_to_bonus_menu_callback(callback: CallbackQuery):
+    """Обработчик кнопки 'Назад в меню' в бонусной неделе"""
+    await callback.answer()
+    await callback.message.answer(
+        "Вы вернулись в главное меню",
+        reply_markup=await bonus_week_menu()
+    )
+
+
+async def bonus_week_pay(message: Message):
+    """Логика оплаты в бонусной неделе"""
+    await ensure_user(message.from_user.id, message.from_user.username)
+    await send_typing_action(message.chat.id)
+    
+    if not is_bonus_week_active():
+        await message.answer(
+            "ℹ️ <b>Бонусная неделя закончилась</b>\n\n"
+            "Бонусное предложение больше не доступно.",
+            parse_mode="HTML",
+            reply_markup=await main_menu(message.from_user.id)
+        )
+        return
+    
+    # Проверяем активную подписку
+    expires_at = await get_subscription_expires_at(message.from_user.id)
+    
+    if expires_at and expires_at > datetime.utcnow():
+        # У пользователя уже есть активная подписка
+        starts_at = await get_subscription_starts_at(message.from_user.id)
+        starts_str = format_datetime_moscow(starts_at) if starts_at else "неизвестно"
+        expires_str = format_datetime_moscow(expires_at)
+        
+        auto_renewal_enabled = await is_auto_renewal_enabled(message.from_user.id)
+        
+        if auto_renewal_enabled:
+            management_text = f"⚙️ Для управления доступом нажмите кнопку «{BTN_MANAGE_SUB}»"
+        else:
+            management_text = "💡 Оплатить доступ вы сможете после окончания вашей подписки"
+        
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>Доступ уже активирован!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📅 <b>Активна с:</b> {starts_str}\n"
+            f"📅 <b>Активна до:</b> {expires_str}\n\n"
+            f"💬 Если у вас нет доступа к платному каналу, обратитесь к менеджеру: @otd_zabota\n\n"
+            f"{management_text}",
+            parse_mode="HTML",
+            reply_markup=await bonus_week_menu()
+        )
+        return
+    
+    # Проверяем активный pending платеж
+    active_payment = await get_active_pending_payment(message.from_user.id, minutes=PAYMENT_LINK_VALID_MINUTES)
+    
+    if active_payment:
+        payment_id, created_at = active_payment
+        pay_url = await maybe_await(get_payment_url, payment_id)
+        
+        if pay_url:
+            pay_button = InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)
+            back_button = InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_bonus_menu")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button], [back_button]])
+            await message.answer(
+                f"⏳ <b>У вас уже есть активная ссылка на оплату</b>\n\n"
+                "Нажмите на кнопку ниже, чтобы перейти к оплате:\n\n"
+                f"⚠️ <i>Ссылка действительна {PAYMENT_LINK_VALID_MINUTES} минут с момента создания</i>\n\n"
+                "После оплаты нажмите: 🔍 Проверить оплату",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            return
+    
+    # Создаем новый платеж для бонусной недели
+    return_url_with_user = get_return_url(message.from_user.id)
+    bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
+    
+    payment_id, pay_url = await maybe_await(
+        create_payment,
+        amount_rub=BONUS_WEEK_PRICE_RUB,
+        description=f"Бонусная неделя: Доступ к каналу ({format_subscription_duration(bonus_duration_days)})",
+        return_url=return_url_with_user,
+        customer_email=CUSTOMER_EMAIL,
+        telegram_user_id=message.from_user.id,
+        enable_save_payment_method=True,
+    )
+    
+    await save_payment(message.from_user.id, payment_id, status="pending")
+    
+    # Формируем текст с предупреждением о бонусной неделе
+    bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+    
+    pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", url=pay_url)
+    back_button = InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_bonus_menu")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button], [back_button]])
+    
+    subscription_text = (
+        "🎉 <b>БОНУСНАЯ НЕДЕЛЯ: Оформление доступа</b>\n\n"
+        f"💎 <b>Стоимость:</b> {format_subscription_duration(bonus_duration_days)} — 1 рубль\n\n"
+        f"⏰ <b>Срок доступа:</b> {bonus_duration_text}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "⚠️ <b>ВАЖНО:</b> После окончания бонусной недели:\n"
+        "• Ваш доступ в канал закончится\n"
+        "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+        "• Автопродление можно отключить в меню «Управление доступом»\n\n"
+        "💳 <b>Сохранение карты:</b>\n"
+        "На форме оплаты вам будет предложено сохранить данные карты для автопродления.\n"
+        "Вы можете выбрать, сохранять карту или нет.\n\n"
+        "📋 Нажимая кнопку оплаты, вы соглашаетесь с:\n"
+        "• Обработкой <a href=\"https://disk.yandex.ru/i/QadGJAMYKqbKpQ\">персональных данных</a>\n"
+        "• Условиями <a href=\"https://disk.yandex.ru/i/fXUDJfj_i5cYIA\">публичной оферты</a>\n"
+        "• Регулярными списаниями при включенном автопродлении\n\n"
+        "🎁 После оплаты вы получите доступ к закрытому каналу"
+    )
+    
+    await message.answer(
+        subscription_text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
 
@@ -671,11 +898,11 @@ async def pay(message: Message):
     else:
         ruble_text = "рублей"
         ruble_text_btn = f"{int(amount_float)}₽"
-    
+
     # Создаем кнопку оплаты с URL
     pay_button = InlineKeyboardButton(text=f"💳 Оплатить {ruble_text_btn}", url=pay_url)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
-    
+
     subscription_text = (
         "💰 <b>Оформление доступа</b>\n\n"
         f"💎 <b>Стоимость:</b> {format_subscription_duration(SUBSCRIPTION_DAYS)} — {PAYMENT_AMOUNT_RUB} {ruble_text}\n\n"
@@ -725,18 +952,18 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✅ <b>Оплата подтверждена!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Оплата подтверждена!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
-                parse_mode="HTML"
-            )
+            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+            parse_mode="HTML"
+        )
         else:
             # Если подписка еще не активирована через webhook, сообщаем об этом
             await message.answer(
@@ -883,7 +1110,7 @@ async def manage_subscription(message: Message):
             "ℹ️ <b>У вас нет активного доступа</b>\n\n"
             "Доступ уже неактивен или отсутствует.",
             parse_mode="HTML",
-            reply_markup=await main_menu(user_id)
+            reply_markup=await main_menu(user_id) if not is_bonus_week_active() else await bonus_week_menu()
         )
         return
     
@@ -896,7 +1123,78 @@ async def manage_subscription(message: Message):
     auto_renewal_enabled = await is_auto_renewal_enabled(user_id)
     auto_status = "✅ Включено" if auto_renewal_enabled else "❌ Отключено"
     
-    # Показываем меню управления (динамически в зависимости от статуса автопродления)
+    # Проверяем, активна ли бонусная неделя и является ли подписка бонусной
+    is_bonus = is_bonus_week_active()
+    bonus_week_end = get_bonus_week_end()
+    
+    # Вычисляем остаток времени до окончания бонусной недели
+    if is_bonus and expires_at <= bonus_week_end:
+        # Это подписка из бонусной недели
+        time_until_bonus_end = bonus_week_end - now
+        if time_until_bonus_end.total_seconds() > 0:
+            days_left = time_until_bonus_end.days
+            hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
+            minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
+            
+            if days_left > 0:
+                time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+            elif hours_left > 0:
+                time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+            else:
+                time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+            
+            # Формируем текст для бонусной недели
+            bonus_warning = (
+                f"\n\n🎉 <b>БОНУСНАЯ НЕДЕЛЯ</b>\n"
+                f"⏰ До окончания бонусной недели осталось: <b>{time_left_text}</b>\n\n"
+            )
+            
+            if auto_renewal_enabled:
+                bonus_warning += (
+                    "⚠️ <b>После окончания бонусной недели:</b>\n"
+                    "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+                    "• Автопродление можно отключить до окончания бонусной недели\n\n"
+                )
+            else:
+                bonus_warning += (
+                    "⚠️ <b>Автопродление отключено</b>\n"
+                    "• После окончания бонусной недели доступ в канал закончится\n"
+                    "• Вы не будете удалены из канала до окончания бонусной недели\n\n"
+                )
+            
+            management_text = (
+                "⚙️ <b>Управление доступом (Бонусная неделя)</b>\n\n"
+                f"📅 <b>Активна с:</b> {starts_str}\n"
+                f"📅 <b>Активна до:</b> {expires_str}\n\n"
+                f"🔄 <b>Автопродление:</b> {auto_status}\n"
+                f"{bonus_warning}"
+            )
+            
+            # Создаем меню для бонусной недели
+            if auto_renewal_enabled:
+                # Показываем кнопку отключения автопродления
+                keyboard = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text=BTN_DISABLE_AUTO_RENEWAL)],
+                        [KeyboardButton(text=BTN_BACK_TO_MENU)]
+                    ],
+                    resize_keyboard=True
+                )
+            else:
+                # Только кнопка назад
+                keyboard = ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text=BTN_BACK_TO_MENU)]],
+                    resize_keyboard=True
+                )
+            
+            await message.answer(
+                management_text,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            return
+    
+    # Обычное управление доступом (продакшн режим)
     await message.answer(
         "⚙️ <b>Управление доступом</b>\n\n"
         f"📅 <b>Активна с:</b> {starts_str}\n"
@@ -909,13 +1207,92 @@ async def manage_subscription(message: Message):
 
 
 # Обработчик для кнопки "Назад в меню"
-@dp.message(lambda m: (m.text or "").strip() == "◀️ Назад в меню")
+@dp.message(lambda m: (m.text or "").strip() == "◀️ Назад в меню" or (m.text or "").strip() == BTN_BACK_TO_MENU)
 async def back_to_main_menu(message: Message):
     """Возврат в главное меню"""
+    if is_bonus_week_active():
+        await message.answer(
+            "📋 <b>Главное меню</b>",
+            parse_mode="HTML",
+            reply_markup=await bonus_week_menu()
+        )
+    else:
+        await message.answer(
+            "📋 <b>Главное меню</b>",
+            parse_mode="HTML",
+            reply_markup=await main_menu(message.from_user.id)
+        )
+
+
+# Обработчик для кнопки "Отказаться от автопродления" (в бонусной неделе)
+@dp.message(lambda m: (m.text or "").strip() == BTN_DISABLE_AUTO_RENEWAL)
+async def disable_auto_renewal_bonus_week(message: Message):
+    """Отключение автопродления в бонусной неделе"""
+    user_id = message.from_user.id
+    await send_typing_action(message.chat.id)
+    
+    if not is_bonus_week_active():
+        await message.answer(
+            "ℹ️ <b>Бонусная неделя закончилась</b>",
+            parse_mode="HTML",
+            reply_markup=await main_menu(user_id)
+        )
+        return
+    
+    expires_at = await get_subscription_expires_at(user_id)
+    now = datetime.utcnow()
+    
+    if not expires_at or expires_at <= now:
+        await message.answer(
+            "ℹ️ <b>У вас нет активного доступа</b>",
+            parse_mode="HTML",
+            reply_markup=await bonus_week_menu()
+        )
+        return
+    
+    # Отключаем автопродление
+    await set_auto_renewal(user_id, False)
+    
+    expires_str = format_datetime_moscow(expires_at)
+    bonus_week_end = get_bonus_week_end()
+    time_until_bonus_end = bonus_week_end - now
+    
+    if time_until_bonus_end.total_seconds() > 0:
+        days_left = time_until_bonus_end.days
+        hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
+        minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
+        
+        if days_left > 0:
+            time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+        elif hours_left > 0:
+            time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+        else:
+            time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+    else:
+        time_left_text = "менее минуты"
+    
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BTN_BACK_TO_MENU)]],
+        resize_keyboard=True
+    )
+    
     await message.answer(
-        "📋 <b>Главное меню</b>",
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⏸️ <b>Автопродление отключено</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "✅ Автопродление доступа отключено.\n"
+        "💳 <b>Данные карты удалены из нашей системы.</b>\n\n"
+        f"📅 <b>Доступ действует до:</b> {expires_str}\n\n"
+        f"⏰ <b>До окончания бонусной недели:</b> {time_left_text}\n\n"
+        "⚠️ <b>Важно:</b> После окончания бонусной недели:\n"
+        "• Доступ в канал закончится\n"
+        "• Вы будете удалены из канала\n"
+        "• Для возобновления доступа необходимо оплатить заново\n\n"
+        "🔒 <b>Безопасность:</b>\n"
+        "• Карта удалена из нашей базы данных\n"
+        "• Мы больше не можем использовать вашу карту для автоплатежей",
         parse_mode="HTML",
-        reply_markup=await main_menu(message.from_user.id)
+        reply_markup=keyboard
     )
 
 
@@ -1157,12 +1534,12 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # 1. Пользователь является владельцем ссылки
             # 2. У владельца есть активная подписка
             if link_owner_id and link_owner_id == user_id and has_active_subscription:
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-            else:
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+        else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
