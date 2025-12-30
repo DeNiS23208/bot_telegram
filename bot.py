@@ -267,7 +267,7 @@ async def cmd_start(message: Message):
         )
     else:
         # Обычный текст для продакшн режима
-    welcome_text = (
+        welcome_text = (
         "👋 <b>Добро пожаловать!</b>\n\n"
         "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
         "🎯 Здесь вы можете:\n"
@@ -1020,9 +1020,9 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-        starts_str = format_datetime_moscow(starts_at)
-        expires_str = format_datetime_moscow(expires_at)
-        await message.answer(
+            starts_str = format_datetime_moscow(starts_at)
+            expires_str = format_datetime_moscow(expires_at)
+            await message.answer(
             "━━━━━━━━━━━━━━━━━━━━\n"
             "✅ <b>Оплата подтверждена!</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1284,7 +1284,7 @@ async def back_to_main_menu(message: Message):
         reply_markup=await bonus_week_menu()
     )
     else:
-    await message.answer(
+        await message.answer(
         "📋 <b>Главное меню</b>",
         parse_mode="HTML",
         reply_markup=await main_menu(message.from_user.id)
@@ -1597,12 +1597,12 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # 1. Пользователь является владельцем ссылки
             # 2. У владельца есть активная подписка
             if link_owner_id and link_owner_id == user_id and has_active_subscription:
-            try:
-                await join_request.approve()
+                try:
+                    await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
-            except Exception as e:
-                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
-        else:
+                except Exception as e:
+                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+            else:
                 # Отклоняем заявку - это не владелец ссылки или подписка истекла
                 try:
                     await join_request.decline()
