@@ -704,10 +704,16 @@ async def back_to_bonus_menu_callback(callback: CallbackQuery):
     )
 
 
-async def bonus_week_pay(message: Message):
-    """Логика оплаты в бонусной неделе"""
+async def bonus_week_pay(message: Message, is_callback: bool = False):
+    """Логика оплаты в бонусной неделе
+    
+    Args:
+        message: Сообщение или callback message
+        is_callback: Если True, редактируем исходное сообщение вместо отправки нового
+    """
     await ensure_user(message.from_user.id, message.from_user.username)
-    await send_typing_action(message.chat.id)
+    if not is_callback:
+        await send_typing_action(message.chat.id)
     
     if not is_bonus_week_active():
         await message.answer(
