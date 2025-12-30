@@ -100,8 +100,16 @@ def get_current_subscription_price() -> str:
 def get_current_subscription_duration() -> float:
     """Возвращает текущую длительность подписки в зависимости от режима"""
     if is_bonus_week_active():
-        # Бонусная неделя: возвращаем в днях (минуты / 1440)
-        return dni_prazdnika / 1440
+        # Бонусная неделя: возвращаем ОСТАВШЕЕСЯ время до конца бонусной недели в днях
+        now = datetime.now(timezone.utc)
+        bonus_end = get_bonus_week_end()
+        remaining_time = bonus_end - now
+        if remaining_time.total_seconds() <= 0:
+            # Бонусная неделя уже закончилась
+            return PRODUCTION_DURATION_DAYS
+        # Конвертируем секунды в дни
+        remaining_days = remaining_time.total_seconds() / 86400
+        return remaining_days
     else:
         # Продакшн: 30 дней
         return PRODUCTION_DURATION_DAYS
