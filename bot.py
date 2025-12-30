@@ -810,12 +810,30 @@ async def bonus_week_pay(message: Message):
         "🎁 После оплаты вы получите доступ к закрытому каналу"
     )
     
-    await message.answer(
-        subscription_text,
-        reply_markup=keyboard,
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+    # Если это callback, редактируем исходное сообщение, иначе отправляем новое
+    if is_callback:
+        try:
+            await message.edit_text(
+                subscription_text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            # Если не удалось отредактировать (например, сообщение уже изменено), отправляем новое
+            await message.answer(
+                subscription_text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+    else:
+        await message.answer(
+            subscription_text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
 
 
 # Обработчик для кнопки "Получить доступ" (когда нет подписки)
