@@ -76,7 +76,7 @@ def is_bonus_week_active() -> bool:
 
 def get_bonus_week_start() -> datetime:
     """Возвращает время начала бонусной недели"""
-    USE_TEST_MODE = True
+    USE_TEST_MODE = False  # False = продакшн режим
     if USE_TEST_MODE:
         global _BONUS_WEEK_TEST_START
         if _BONUS_WEEK_TEST_START is None:
@@ -87,7 +87,7 @@ def get_bonus_week_start() -> datetime:
 
 def get_bonus_week_end() -> datetime:
     """Возвращает время окончания бонусной недели"""
-    USE_TEST_MODE = True
+    USE_TEST_MODE = False  # False = продакшн режим
     if USE_TEST_MODE:
         return get_bonus_week_start() + timedelta(minutes=dni_prazdnika)
     else:
