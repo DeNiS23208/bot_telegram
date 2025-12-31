@@ -908,13 +908,27 @@ async def check_expired_subscriptions():
                                         payment_status = refreshed_status
                                         logger.info(f"✅ Автоплатеж {payment_id} для пользователя {telegram_id} успешно завершен после ожидания.")
                                 
+                                # КРИТИЧЕСКАЯ ПРОВЕРКА: Убеждаемся, что платеж действительно успешен
+                                # Проверяем статус платежа из API YooKassa перед обработкой
+                                try:
+                                    from yookassa import Payment
+                                    payment_api_check = Payment.find_one(payment_id)
+                                    if payment_api_check.status != "succeeded":
+                                        logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: платеж {payment_id} не имеет статус 'succeeded' в API (статус: {payment_api_check.status})")
+                                        auto_payment_failed = True
+                                        continue
+                                except Exception as api_check_error:
+                                    logger.error(f"❌ Ошибка проверки статуса платежа {payment_id} в API: {api_check_error}")
+                                    auto_payment_failed = True
+                                    continue
+                                
                                 # Если платеж успешен (сразу или после ожидания)
                                 if payment_status == "succeeded" and not auto_payment_failed:
                                     # ВАЖНО: Проверяем, что платеж действительно существует в БД и имеет статус "succeeded"
                                     # Это предотвращает отправку уведомлений о несуществующих платежах
                                     async with aiosqlite.connect(DB_PATH) as db_check_payment:
                                         cursor_payment = await db_check_payment.execute(
-                                            "SELECT payment_id, status FROM payments WHERE payment_id = ?",
+                                            "SELECT payment_id, status, created_at FROM payments WHERE payment_id = ?",
                                             (payment_id,)
                                         )
                                         row_payment = await cursor_payment.fetchone()
@@ -923,6 +937,22 @@ async def check_expired_subscriptions():
                                             logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: платеж {payment_id} не найден в БД или не имеет статус 'succeeded'")
                                             auto_payment_failed = True
                                             continue
+                                        
+                                        # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Проверяем, что платеж был создан недавно (в течение последних 10 минут)
+                                        # Это предотвращает обработку старых платежей
+                                        if row_payment[2]:
+                                            try:
+                                                payment_created_at = datetime.fromisoformat(row_payment[2])
+                                                if payment_created_at.tzinfo is None:
+                                                    payment_created_at = payment_created_at.replace(tzinfo=timezone.utc)
+                                                time_since_creation = (datetime.now(timezone.utc) - payment_created_at).total_seconds() / 60
+                                                if time_since_creation > 10:
+                                                    logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: платеж {payment_id} был создан {time_since_creation:.1f} минут назад (слишком старый)")
+                                                    auto_payment_failed = True
+                                                    continue
+                                            except Exception as time_check_error:
+                                                logger.warning(f"⚠️ Ошибка проверки времени создания платежа {payment_id}: {time_check_error}")
+                                                # Продолжаем обработку, если не удалось проверить время
                                     
                                     # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД (кроме текущего автоплатежа)
                                     # Это гарантирует, что мы не отправляем уведомление пользователям, которые никогда не платили
