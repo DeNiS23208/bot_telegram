@@ -645,8 +645,10 @@ async def check_bonus_week_ending_soon():
             minutes_until_end = time_until_end.total_seconds() / 60
             
             # Проверяем, нужно ли отправлять уведомление (за vremya_sms минут до окончания)
-            # Используем погрешность ±2 минуты для надежности (чтобы не пропустить)
-            if vremya_sms - 2 <= minutes_until_end <= vremya_sms + 2:
+            # Используем погрешность ±1 минуту для надежности (чтобы не пропустить)
+            # Проверяем, что осталось от vremya_sms-1 до vremya_sms+1 минут
+            if vremya_sms - 1 <= minutes_until_end <= vremya_sms + 1:
+                logger.info(f"🔔 Время для уведомления о конце бонусной недели: minutes_until_end={minutes_until_end:.1f}, vremya_sms={vremya_sms}")
                 for telegram_id, expires_at_str in active_subs:
                     if telegram_id in notified_users:
                         continue
@@ -727,8 +729,18 @@ async def check_expired_subscriptions():
             await asyncio.sleep(CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS)
             
             # Очищаем processed_users от записей старше 5 минут (чтобы можно было повторить попытку)
-            now = datetime.utcnow()
-            expired_processed = [uid for uid, ts in processed_users.items() if (now - ts).total_seconds() > 300]
+            now_check = datetime.now(timezone.utc)
+            expired_processed = []
+            for uid, ts in processed_users.items():
+                # Убеждаемся, что ts имеет timezone
+                if isinstance(ts, str):
+                    ts_dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                else:
+                    ts_dt = ts
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+                if (now_check - ts_dt).total_seconds() > 300:
+                    expired_processed.append(uid)
             for uid in expired_processed:
                 del processed_users[uid]
                 logger.info(f"🔄 Удален пользователь {uid} из processed_users (прошло более 5 минут)")
