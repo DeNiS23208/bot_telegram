@@ -293,9 +293,21 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     from db import _clear_cache
     _clear_cache()
     
-    # Если активна бонусная неделя, показываем специальное меню
-    if is_bonus_week_active():
-        # Проверяем, есть ли активная подписка (даже в бонусной неделе)
+    # Сначала проверяем наличие активной подписки
+    from db import get_subscription_expires_at, is_auto_renewal_enabled
+    from datetime import timezone
+    expires_at = await get_subscription_expires_at(telegram_id)
+    now = datetime.now(timezone.utc)
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    has_active_subscription = expires_at and expires_at > now
+    auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
+    show_manage_button = has_active_subscription and auto_renewal_enabled
+    
+    # КРИТИЧЕСКИ ВАЖНО: Если активна бонусная неделя, но у пользователя есть активная подписка,
+    # показываем меню с "Управление доступом", а не бонусное меню
+    if is_bonus_week_active() and not show_manage_button:
+        # Бонусная неделя активна, но у пользователя нет активной подписки - показываем бонусное меню
         # Используем функцию из webhook_app.py, а не из db.py
         # ВАЖНО: Проверяем напрямую в БД для гарантии актуальности
         has_active = await has_active_subscription(telegram_id)

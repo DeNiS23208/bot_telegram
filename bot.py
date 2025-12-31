@@ -125,10 +125,6 @@ async def bonus_week_menu() -> ReplyKeyboardMarkup:
 
 async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     """Создает главное меню с учетом статуса доступа"""
-    # Если активна бонусная неделя, показываем специальное меню
-    if is_bonus_week_active():
-        return await bonus_week_menu()
-    
     # Определяем, какая кнопка показывается: "Получить доступ" или "Управление доступом"
     if telegram_id:
         expires_at = await get_subscription_expires_at(telegram_id)
@@ -146,6 +142,12 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
         show_manage_button = has_active_subscription and auto_renewal_enabled
     else:
         show_manage_button = False
+    
+    # КРИТИЧЕСКИ ВАЖНО: Если активна бонусная неделя, но у пользователя есть активная подписка,
+    # показываем меню с "Управление доступом", а не бонусное меню
+    if is_bonus_week_active() and not show_manage_button:
+        # Бонусная неделя активна, но у пользователя нет активной подписки - показываем бонусное меню
+        return await bonus_week_menu()
     
     # Если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
     payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
