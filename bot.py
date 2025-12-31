@@ -44,6 +44,7 @@ from config import (
     get_current_subscription_duration,
     get_production_subscription_price,
     get_production_subscription_duration,
+    get_bonus_week_start,
     get_bonus_week_end,
     dni_prazdnika,
     vremya_sms,
