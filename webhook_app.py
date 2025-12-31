@@ -1607,8 +1607,31 @@ async def yookassa_webhook(request: Request):
     await activate_subscription(tg_user_id, days=subscription_duration)
     logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(subscription_duration)} (тип платежа: {payment_method_type or 'неизвестен/отсутствует'})")
     
-    # Очищаем кэш подписки сразу после активации, чтобы has_active_subscription увидела новую подписку
+    # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш подписки сразу после активации
     from db import _clear_cache
+    _clear_cache()
+    
+    # Даем небольшую задержку для гарантии, что БД обновилась
+    await asyncio.sleep(0.3)
+    
+    # ПРОВЕРЯЕМ, что подписка действительно сохранена в БД
+    async with aiosqlite.connect(DB_PATH) as db_verify:
+        cursor_verify = await db_verify.execute(
+            "SELECT expires_at FROM subscriptions WHERE telegram_id = ?",
+            (tg_user_id,)
+        )
+        row_verify = await cursor_verify.fetchone()
+        if row_verify and row_verify[0]:
+            from datetime import timezone
+            expires_at_verify = datetime.fromisoformat(row_verify[0])
+            if expires_at_verify.tzinfo is None:
+                expires_at_verify = expires_at_verify.replace(tzinfo=timezone.utc)
+            now_verify = datetime.now(timezone.utc)
+            is_active_verify = expires_at_verify > now_verify
+            logger.info(f"✅ ПОДТВЕРЖДЕНО: Подписка сохранена в БД для пользователя {tg_user_id}, expires_at={expires_at_verify.isoformat()}, is_active={is_active_verify}")
+        else:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Подписка НЕ найдена в БД для пользователя {tg_user_id} после активации!")
+    
     _clear_cache()
     
     # Проверяем, что подписка действительно активна после активации
@@ -1797,17 +1820,15 @@ async def yookassa_webhook(request: Request):
             starts_str = format_datetime_moscow(starts_at_dt)
             expires_str = format_datetime_moscow(expires_at_dt)
 
-        # Получаем меню с обновленными кнопками (теперь должна быть "Управление доступом")
-        # ВАЖНО: Принудительно обновляем меню после оплаты, чтобы показать правильные кнопки
-        # Очищаем кэш еще раз перед получением меню, чтобы гарантировать актуальные данные
+        # КРИТИЧЕСКИ ВАЖНО: ПРИНУДИТЕЛЬНО создаем правильное меню после успешной оплаты
+        # НЕ полагаемся на get_main_menu_for_user - создаем меню напрямую
         from db import _clear_cache
+        from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+        
         _clear_cache()
+        await asyncio.sleep(0.2)  # Небольшая задержка для гарантии обновления БД
         
-        # Даем небольшую задержку, чтобы БД точно обновилась
-        await asyncio.sleep(0.2)
-        
-        # Проверяем статус подписки перед получением меню
-        # Проверяем напрямую в БД, чтобы убедиться, что подписка сохранена
+        # ПРОВЕРЯЕМ напрямую в БД, что подписка сохранена
         async with aiosqlite.connect(DB_PATH) as db_check:
             cursor = await db_check.execute(
                 "SELECT expires_at FROM subscriptions WHERE telegram_id = ?",
@@ -1821,39 +1842,44 @@ async def yookassa_webhook(request: Request):
                     expires_at_check = expires_at_check.replace(tzinfo=timezone.utc)
                 now_check = datetime.now(timezone.utc)
                 is_active_db = expires_at_check > now_check
-                logger.info(f"🔍 Прямая проверка БД: expires_at={expires_at_check.isoformat()}, now={now_check.isoformat()}, is_active={is_active_db}")
+                logger.info(f"✅ ПОДТВЕРЖДЕНО: Подписка в БД для пользователя {tg_user_id}, expires_at={expires_at_check.isoformat()}, is_active={is_active_db}")
             else:
-                logger.warning(f"⚠️ Подписка не найдена в БД для пользователя {tg_user_id}!")
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Подписка НЕ найдена в БД для пользователя {tg_user_id}!")
         
-        # Очищаем кэш еще раз перед проверкой через функцию
-        _clear_cache()
-        has_active_check = await has_active_subscription(tg_user_id)
-        logger.info(f"🔍 Проверка через функцию: has_active_subscription({tg_user_id}) = {has_active_check}, is_bonus_week_active() = {is_bonus_week_active()}")
-        
-        # Очищаем кэш еще раз перед получением меню
-        _clear_cache()
-        menu = await get_main_menu_for_user(tg_user_id)
-        menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
-        logger.info(f"🔍 Меню для пользователя {tg_user_id} после оплаты: {menu_buttons}")
-        
-        # ВАЖНО: Если меню все еще показывает "Бонус", принудительно создаем меню с "Управление доступом"
-        if is_bonus_week_active() and has_active_check:
-            # Проверяем, что меню действительно содержит "Управление доступом"
-            menu_has_manage = any("Управление доступом" in btn.text for row in menu.keyboard for btn in row)
-            if not menu_has_manage:
-                logger.warning(f"⚠️ Меню не содержит 'Управление доступом', принудительно создаем правильное меню для пользователя {tg_user_id}")
-                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-                BTN_MANAGE_SUB = "⚙️ Управление доступом"
-                BTN_ABOUT_1 = "ℹ️ О проекте"
-                keyboard = [
+        # ПРИНУДИТЕЛЬНО создаем правильное меню в зависимости от режима
+        if is_bonus_week_active():
+            # БОНУСНАЯ НЕДЕЛЯ: После успешной оплаты ВСЕГДА показываем "Управление доступом"
+            BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            menu = ReplyKeyboardMarkup(
+                keyboard=[
                     [KeyboardButton(text=BTN_MANAGE_SUB)],
                     [KeyboardButton(text=BTN_ABOUT_1)],
-                ]
-                menu = ReplyKeyboardMarkup(
-                    keyboard=keyboard,
-                    resize_keyboard=True,
-                )
-                logger.info(f"✅ Принудительно создано меню с 'Управление доступом' для пользователя {tg_user_id}")
+                ],
+                resize_keyboard=True,
+            )
+            logger.info(f"✅ ПРИНУДИТЕЛЬНО создано меню БОНУСНОЙ НЕДЕЛИ с 'Управление доступом' для пользователя {tg_user_id}")
+        else:
+            # ПРОДАКШН: Используем стандартное меню
+            BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_STATUS_1 = "📊 Статус доступа"
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            BTN_CHECK_1 = "🔍 Проверить оплату"
+            BTN_SUPPORT = "💬 Поддержка"
+            menu = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text=BTN_MANAGE_SUB)],
+                    [KeyboardButton(text=BTN_STATUS_1)],
+                    [KeyboardButton(text=BTN_ABOUT_1)],
+                    [KeyboardButton(text=BTN_CHECK_1)],
+                    [KeyboardButton(text=BTN_SUPPORT)],
+                ],
+                resize_keyboard=True,
+            )
+            logger.info(f"✅ Создано меню ПРОДАКШН с 'Управление доступом' для пользователя {tg_user_id}")
+        
+        menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
+        logger.info(f"🔍 ФИНАЛЬНОЕ меню для пользователя {tg_user_id}: {menu_buttons}")
         
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
         duration_text = format_subscription_duration(subscription_duration)
@@ -1893,26 +1919,9 @@ async def yookassa_webhook(request: Request):
             )
             logger.info(f"📝 Текст уведомления (первые 200 символов): {notification_text[:200]}...")
             
-            # КРИТИЧЕСКИ ВАЖНО: Проверяем и принудительно обновляем меню ПЕРЕД отправкой первого сообщения
-            has_active_check = await has_active_subscription(tg_user_id)
-            logger.info(f"🔍 Проверка перед отправкой: has_active={has_active_check}, is_bonus_week_active={is_bonus_week_active()}")
-            
-            # Если бонусная неделя активна и подписка активна - ПРИНУДИТЕЛЬНО создаем правильное меню
-            if is_bonus_week_active() and has_active_check:
-                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-                BTN_MANAGE_SUB = "⚙️ Управление доступом"
-                BTN_ABOUT_1 = "ℹ️ О проекте"
-                menu = ReplyKeyboardMarkup(
-                    keyboard=[
-                        [KeyboardButton(text=BTN_MANAGE_SUB)],
-                        [KeyboardButton(text=BTN_ABOUT_1)],
-                    ],
-                    resize_keyboard=True,
-                )
-                logger.info(f"✅ ПРИНУДИТЕЛЬНО создано меню с 'Управление доступом' ПЕРЕД отправкой сообщения об оплате для пользователя {tg_user_id}")
-            
+            # Меню уже создано принудительно выше - просто логируем
             menu_buttons_before = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
-            logger.info(f"🔍 Меню перед отправкой: {menu_buttons_before}")
+            logger.info(f"🔍 ФИНАЛЬНАЯ ПРОВЕРКА перед отправкой сообщения об оплате: menu={menu_buttons_before}, is_bonus_week_active={is_bonus_week_active()}")
             
             # Отправляем сообщение об успешной оплате с ПРАВИЛЬНЫМ меню
             await safe_send_message(
