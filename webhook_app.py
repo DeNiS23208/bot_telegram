@@ -1750,9 +1750,30 @@ async def yookassa_webhook(request: Request):
         from db import _clear_cache
         _clear_cache()
         
+        # Даем небольшую задержку, чтобы БД точно обновилась
+        await asyncio.sleep(0.1)
+        
         # Проверяем статус подписки перед получением меню
+        # Проверяем напрямую в БД, чтобы убедиться, что подписка сохранена
+        async with aiosqlite.connect(DB_PATH) as db_check:
+            cursor = await db_check.execute(
+                "SELECT expires_at FROM subscriptions WHERE telegram_id = ?",
+                (tg_user_id,)
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                from datetime import timezone
+                expires_at_check = datetime.fromisoformat(row[0])
+                if expires_at_check.tzinfo is None:
+                    expires_at_check = expires_at_check.replace(tzinfo=timezone.utc)
+                now_check = datetime.now(timezone.utc)
+                is_active_db = expires_at_check > now_check
+                logger.info(f"🔍 Прямая проверка БД: expires_at={expires_at_check.isoformat()}, now={now_check.isoformat()}, is_active={is_active_db}")
+            else:
+                logger.warning(f"⚠️ Подписка не найдена в БД для пользователя {tg_user_id}!")
+        
         has_active_check = await has_active_subscription(tg_user_id)
-        logger.info(f"🔍 Проверка перед получением меню: has_active_subscription({tg_user_id}) = {has_active_check}, is_bonus_week_active() = {is_bonus_week_active()}")
+        logger.info(f"🔍 Проверка через функцию: has_active_subscription({tg_user_id}) = {has_active_check}, is_bonus_week_active() = {is_bonus_week_active()}")
         
         menu = await get_main_menu_for_user(tg_user_id)
         menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
