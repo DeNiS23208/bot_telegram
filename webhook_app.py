@@ -617,8 +617,8 @@ async def check_bonus_week_ending_soon():
             minutes_until_end = time_until_end.total_seconds() / 60
             
             # Проверяем, нужно ли отправлять уведомление (за vremya_sms минут до окончания)
-            # Используем погрешность ±1 минута для надежности
-            if vremya_sms - 1 <= minutes_until_end <= vremya_sms + 1:
+            # Используем погрешность ±2 минуты для надежности (чтобы не пропустить)
+            if vremya_sms - 2 <= minutes_until_end <= vremya_sms + 2:
                 for telegram_id, expires_at_str in active_subs:
                     if telegram_id in notified_users:
                         continue
@@ -730,10 +730,7 @@ async def check_expired_subscriptions():
                         is_bonus_subscription = expires_at <= bonus_week_end if expires_at else False
                         bonus_week_ended = not is_bonus_week_active()
                         
-                        # Если бонусная неделя закончилась и это была подписка из бонусной недели с автопродлением
-                        # Нужно списать продакшн цену
-                        if bonus_week_ended and is_bonus_subscription and auto_renewal_enabled and saved_payment_method_id:
-                            logger.info(f"🔄 Бонусная неделя закончилась для пользователя {telegram_id}, переходим на продакшн цены")
+                        logger.info(f"🔍 Пользователь {telegram_id}: bonus_week_ended={bonus_week_ended}, is_bonus_subscription={is_bonus_subscription}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                         
                         # Проверяем, включено ли автопродление и есть ли сохраненный способ оплаты
                         if auto_renewal_enabled and saved_payment_method_id:
@@ -745,15 +742,22 @@ async def check_expired_subscriptions():
                                 CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
                                 
                                 # Определяем цену и длительность для автопродления
-                                # Если бонусная неделя закончилась, используем продакшн цены
-                                if is_bonus_week_active():
+                                # ВАЖНО: Если бонусная неделя закончилась И это была подписка из бонусной недели, используем продакшн цены
+                                if bonus_week_ended and is_bonus_subscription:
+                                    # Бонусная неделя закончилась и это была подписка из бонусной недели - используем продакшн цены
+                                    auto_amount = get_production_subscription_price()
+                                    auto_duration = get_production_subscription_duration()
+                                    logger.info(f"🔄 Бонусная неделя закончилась для пользователя {telegram_id}, используем продакшн цены: {auto_amount} руб, {auto_duration} дней")
+                                elif is_bonus_week_active():
                                     # Бонусная неделя еще активна - используем бонусную цену
                                     auto_amount = BONUS_WEEK_PRICE_RUB
                                     auto_duration = dni_prazdnika / 1440  # В днях
+                                    logger.info(f"🎁 Бонусная неделя активна для пользователя {telegram_id}, используем бонусную цену: {auto_amount} руб, {auto_duration} дней")
                                 else:
-                                    # Бонусная неделя закончилась - используем продакшн цены
+                                    # Обычный продакшн режим
                                     auto_amount = get_production_subscription_price()
                                     auto_duration = get_production_subscription_duration()
+                                    logger.info(f"💼 Продакшн режим для пользователя {telegram_id}, используем продакшн цены: {auto_amount} руб, {auto_duration} дней")
                                 
                                 # Создаем автоматический платеж
                                 payment_id, payment_status = create_auto_payment(
@@ -1635,18 +1639,18 @@ async def yookassa_webhook(request: Request):
                 )
         
         if not invite_link:
-            # Если и это не получилось, пробуем основную ссылку канала
+                # Если и это не получилось, пробуем основную ссылку канала
             logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
-            try:
-                chat = await bot.get_chat(CHANNEL_ID)
-                if chat.invite_link:
-                    invite_link = chat.invite_link
+                try:
+                    chat = await bot.get_chat(CHANNEL_ID)
+                    if chat.invite_link:
+                        invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                else:
-                    raise Exception("У канала нет основной ссылки")
-            except Exception as e3:
+                    else:
+                        raise Exception("У канала нет основной ссылки")
+                except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                raise e3
+                    raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
@@ -1736,8 +1740,8 @@ async def yookassa_webhook(request: Request):
                 chat_id=tg_user_id,
                 text=notification_text,
                 parse_mode="HTML",
-                reply_markup=menu
-            )
+            reply_markup=menu
+        )
             logger.info(f"✅ Сообщение об успешной оплате отправлено пользователю {tg_user_id}")
         except Exception as send_error:
             logger.error(f"❌ Ошибка отправки сообщения об успешной оплате пользователю {tg_user_id}: {send_error}")
