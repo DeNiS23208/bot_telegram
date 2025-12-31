@@ -800,44 +800,45 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
     # Проверяем активный pending платеж
     active_payment = await get_active_pending_payment(message.from_user.id, minutes=PAYMENT_LINK_VALID_MINUTES)
     
+    pay_url = None
+    payment_id = None
+    
     if active_payment:
+        # Используем существующий платеж
         payment_id, created_at = active_payment
         pay_url = await maybe_await(get_payment_url, payment_id)
+    else:
+        # Создаем новый платеж для бонусной недели
+        return_url_with_user = get_return_url(message.from_user.id)
+        bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
         
-        if pay_url:
-            pay_button = InlineKeyboardButton(text="💳 Перейти к оплате", url=pay_url)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
-            await message.answer(
-                f"⏳ <b>У вас уже есть активная ссылка на оплату</b>\n\n"
-                "Нажмите на кнопку ниже, чтобы перейти к оплате:\n\n"
-                f"⚠️ <i>Ссылка действительна {PAYMENT_LINK_VALID_MINUTES} минут с момента создания</i>\n\n"
-                "После оплаты нажмите: 🔍 Проверить оплату",
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
-            return
+        payment_id, pay_url = await maybe_await(
+            create_payment,
+            amount_rub=BONUS_WEEK_PRICE_RUB,
+            description=f"Бонусная неделя: Доступ к каналу ({format_subscription_duration(bonus_duration_days)})",
+            return_url=return_url_with_user,
+            customer_email=CUSTOMER_EMAIL,
+            telegram_user_id=message.from_user.id,
+            enable_save_payment_method=True,
+        )
+        
+        await save_payment(message.from_user.id, payment_id, status="pending")
     
-    # Создаем новый платеж для бонусной недели
-    return_url_with_user = get_return_url(message.from_user.id)
-    bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
-    
-    payment_id, pay_url = await maybe_await(
-        create_payment,
-        amount_rub=BONUS_WEEK_PRICE_RUB,
-        description=f"Бонусная неделя: Доступ к каналу ({format_subscription_duration(bonus_duration_days)})",
-        return_url=return_url_with_user,
-        customer_email=CUSTOMER_EMAIL,
-        telegram_user_id=message.from_user.id,
-        enable_save_payment_method=True,
-    )
-    
-    await save_payment(message.from_user.id, payment_id, status="pending")
+    # Если URL не получен, отправляем сообщение об ошибке
+    if not pay_url:
+        await message.answer(
+            "❌ <b>Ошибка создания платежа</b>\n\n"
+            "Не удалось создать ссылку на оплату. Пожалуйста, попробуйте позже.",
+            parse_mode="HTML",
+            reply_markup=await bonus_week_menu()
+        )
+        return
     
     # Формируем текст с предупреждением о бонусной неделе
+    bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
     bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
     
     pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", url=pay_url)
-    # Убираем кнопку "Назад в меню" - не нужна при редактировании сообщения
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
     
     subscription_text = (
@@ -859,7 +860,7 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
         "🎁 После оплаты вы получите доступ к закрытому каналу"
     )
     
-    # Если это callback, редактируем исходное сообщение с новым текстом и кнопкой
+    # Если это callback, редактируем исходное сообщение с новым текстом и кнопкой с URL
     if is_callback:
         try:
             await message.edit_text(
