@@ -447,12 +447,12 @@ async def get_expired_pending_payments():
 async def get_expired_subscriptions():
     """Получает список подписок, которые истекли"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         # Подписки, которые уже истекли (проверяем с небольшим запасом для точности)
         cursor = await db_conn.execute(
             """
-            SELECT telegram_id, expires_at, auto_renewal_enabled, saved_payment_method_id
+            SELECT telegram_id, expires_at, auto_renewal_enabled, saved_payment_method_id, starts_at
             FROM subscriptions 
             WHERE expires_at IS NOT NULL 
             AND expires_at <= ?
@@ -788,11 +788,41 @@ async def check_expired_subscriptions():
                         auto_payment_succeeded = False  # Флаг успешного автопродления
                         
                         # Проверяем, является ли это подписка из бонусной недели
+                        from config import get_bonus_week_start
+                        bonus_week_start = get_bonus_week_start()
                         bonus_week_end = get_bonus_week_end()
-                        is_bonus_subscription = expires_at <= bonus_week_end if expires_at else False
+                        # Убеждаемся, что bonus_week_start и bonus_week_end имеют timezone
+                        if bonus_week_start.tzinfo is None:
+                            bonus_week_start = bonus_week_start.replace(tzinfo=timezone.utc)
+                        if bonus_week_end.tzinfo is None:
+                            bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+                        
+                        # Определяем, является ли это подписка из бонусной недели
+                        # Вариант 1: Проверяем по starts_at (если доступно) - подписка была создана во время бонусной недели
+                        is_bonus_subscription = False
+                        if starts_at_str:
+                            try:
+                                starts_at = datetime.fromisoformat(starts_at_str)
+                                if starts_at.tzinfo is None:
+                                    starts_at = starts_at.replace(tzinfo=timezone.utc)
+                                # Подписка из бонусной недели, если она была создана во время бонусной недели
+                                is_bonus_subscription = bonus_week_start <= starts_at <= bonus_week_end
+                                logger.info(f"🔍 Проверка по starts_at: starts_at={starts_at}, bonus_week_start={bonus_week_start}, bonus_week_end={bonus_week_end}, is_bonus={is_bonus_subscription}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ Ошибка парсинга starts_at для пользователя {telegram_id}: {e}")
+                        
+                        # Вариант 2: Если starts_at недоступно, проверяем по expires_at
+                        # Подписка из бонусной недели, если она истекает до или в момент окончания бонусной недели
+                        if not is_bonus_subscription and expires_at:
+                            # Подписка из бонусной недели, если она истекает до или в момент окончания бонусной недели
+                            # (с учетом погрешности в 2 минуты для подписок, созданных в конце бонусной недели)
+                            time_diff = (expires_at - bonus_week_end).total_seconds() / 60
+                            is_bonus_subscription = expires_at <= bonus_week_end or (0 <= time_diff <= 2)
+                            logger.info(f"🔍 Проверка по expires_at: expires_at={expires_at}, bonus_week_end={bonus_week_end}, time_diff={time_diff:.1f} мин, is_bonus={is_bonus_subscription}")
+                        
                         bonus_week_ended = not is_bonus_week_active()
                         
-                        logger.info(f"🔍 Пользователь {telegram_id}: bonus_week_ended={bonus_week_ended}, is_bonus_subscription={is_bonus_subscription}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
+                        logger.info(f"🔍 Пользователь {telegram_id}: bonus_week_ended={bonus_week_ended}, is_bonus_subscription={is_bonus_subscription}, starts_at={starts_at_str}, expires_at={expires_at}, bonus_week_start={bonus_week_start}, bonus_week_end={bonus_week_end}, now={now}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                         
                         # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД
                         # Это предотвращает автопродление для пользователей, которые никогда не платили
