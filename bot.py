@@ -1460,7 +1460,12 @@ async def cancel_subscription(message: Message):
     
     # Проверяем, есть ли активная подписка
     expires_at = await get_subscription_expires_at(user_id)
-    now = datetime.utcnow()
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    
+    # Убеждаемся, что expires_at имеет timezone для сравнения
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
     
     if not expires_at or expires_at <= now:
         await message.answer(
@@ -1685,8 +1690,13 @@ async def approve_join_request(join_request: ChatJoinRequest):
             # Проверяем, что у владельца есть активная подписка
             if link_owner_id:
                 expires_at = await get_subscription_expires_at(link_owner_id)
-                from datetime import datetime
-                now = datetime.utcnow()
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                
+                # Убеждаемся, что expires_at имеет timezone для сравнения
+                if expires_at and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                
                 has_active_subscription = expires_at and expires_at > now
             else:
                 has_active_subscription = False
