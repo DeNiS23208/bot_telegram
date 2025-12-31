@@ -1173,11 +1173,15 @@ async def yookassa_webhook(request: Request):
                         logger.info(f"⚠️ Платеж {payment_id} уже имеет статус 'succeeded' в БД - игнорируем событие canceled")
                 
                 # Также проверяем, есть ли у пользователя активная подписка (возможно, платеж уже обработан)
-                from db import has_active_subscription
-                has_active = await has_active_subscription(tg_user_id)
-                if has_active:
-                    logger.info(f"⚠️ У пользователя {tg_user_id} уже есть активная подписка - игнорируем событие canceled для платежа {payment_id}")
-                    payment_already_succeeded = True
+                from db import get_subscription_expires_at
+                expires_at = await get_subscription_expires_at(tg_user_id)
+                if expires_at:
+                    now = datetime.now(timezone.utc)
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    if expires_at > now:
+                        logger.info(f"⚠️ У пользователя {tg_user_id} уже есть активная подписка (до {expires_at}) - игнорируем событие canceled для платежа {payment_id}")
+                        payment_already_succeeded = True
                 
                 if payment_already_succeeded:
                     logger.info(f"ℹ️ Платеж {payment_id} уже был успешно обработан - не отправляем сообщение об отмене")
