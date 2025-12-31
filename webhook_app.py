@@ -1157,11 +1157,23 @@ async def yookassa_webhook(request: Request):
                 except Exception as e:
                     logger.warning(f"⚠️ Ошибка получения времени создания платежа: {e}")
                 
-                # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, был ли платеж уже успешно обработан
-                # Если платеж уже успешен, не отправляем сообщение об отмене
-                payment_already_succeeded = await already_processed(payment_id)
+                # КРИТИЧЕСКАЯ ПРОВЕРКА 1: Проверяем актуальный статус платежа из API YooKassa
+                # Это самая надежная проверка - если платеж успешен в YooKassa, игнорируем canceled
+                try:
+                    current_payment_status = payment.status
+                    if current_payment_status == "succeeded":
+                        logger.info(f"✅ Платеж {payment_id} имеет статус 'succeeded' в API YooKassa - игнорируем событие canceled")
+                        return {"ok": True, "event": "payment.canceled", "ignored": "payment_is_succeeded_in_api"}
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка проверки статуса платежа из API: {e}")
                 
-                # Также проверяем статус платежа в БД
+                # КРИТИЧЕСКАЯ ПРОВЕРКА 2: Проверяем, был ли платеж уже успешно обработан
+                payment_already_succeeded = await already_processed(payment_id)
+                if payment_already_succeeded:
+                    logger.info(f"✅ Платеж {payment_id} уже был обработан (already_processed) - игнорируем событие canceled")
+                    return {"ok": True, "event": "payment.canceled", "ignored": "already_processed"}
+                
+                # КРИТИЧЕСКАЯ ПРОВЕРКА 3: Проверяем статус платежа в БД
                 async with aiosqlite.connect(DB_PATH) as db_check:
                     cursor = await db_check.execute(
                         "SELECT status FROM payments WHERE payment_id = ?",
@@ -1169,10 +1181,10 @@ async def yookassa_webhook(request: Request):
                     )
                     row = await cursor.fetchone()
                     if row and row[0] == "succeeded":
-                        payment_already_succeeded = True
-                        logger.info(f"⚠️ Платеж {payment_id} уже имеет статус 'succeeded' в БД - игнорируем событие canceled")
+                        logger.info(f"✅ Платеж {payment_id} уже имеет статус 'succeeded' в БД - игнорируем событие canceled")
+                        return {"ok": True, "event": "payment.canceled", "ignored": "succeeded_in_db"}
                 
-                # Также проверяем, есть ли у пользователя активная подписка (возможно, платеж уже обработан)
+                # КРИТИЧЕСКАЯ ПРОВЕРКА 4: Проверяем, есть ли у пользователя активная подписка (возможно, платеж уже обработан)
                 from db import get_subscription_expires_at
                 expires_at = await get_subscription_expires_at(tg_user_id)
                 if expires_at:
@@ -1180,12 +1192,40 @@ async def yookassa_webhook(request: Request):
                     if expires_at.tzinfo is None:
                         expires_at = expires_at.replace(tzinfo=timezone.utc)
                     if expires_at > now:
-                        logger.info(f"⚠️ У пользователя {tg_user_id} уже есть активная подписка (до {expires_at}) - игнорируем событие canceled для платежа {payment_id}")
-                        payment_already_succeeded = True
+                        logger.info(f"✅ У пользователя {tg_user_id} уже есть активная подписка (до {expires_at}) - игнорируем событие canceled для платежа {payment_id}")
+                        return {"ok": True, "event": "payment.canceled", "ignored": "user_has_active_subscription"}
                 
-                if payment_already_succeeded:
-                    logger.info(f"ℹ️ Платеж {payment_id} уже был успешно обработан - не отправляем сообщение об отмене")
-                    return {"ok": True, "event": "payment.canceled", "ignored": "already_succeeded"}
+                # КРИТИЧЕСКАЯ ПРОВЕРКА 5: Проверяем, не был ли создан платеж очень недавно (меньше 30 секунд)
+                # Если платеж был создан меньше 30 секунд назад и пришел canceled, это может быть ошибка
+                # или старый canceled, который пришел позже успешного платежа
+                try:
+                    if hasattr(payment, 'created_at'):
+                        created_at = payment.created_at
+                        if isinstance(created_at, str):
+                            created_at_dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        else:
+                            created_at_dt = created_at
+                        
+                        if created_at_dt.tzinfo is None:
+                            created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                        
+                        now_check = datetime.now(timezone.utc)
+                        time_since_creation = (now_check - created_at_dt).total_seconds()
+                        
+                        # Если платеж был создан меньше 30 секунд назад, это подозрительно
+                        # Возможно, это старый canceled, который пришел позже
+                        if time_since_creation < 30:
+                            logger.warning(f"⚠️ Платеж {payment_id} был создан всего {time_since_creation:.1f} секунд назад - подозрительно, проверяем статус еще раз")
+                            # Проверяем статус еще раз из API
+                            try:
+                                refreshed_payment = Payment.find_one(payment_id)
+                                if refreshed_payment.status == "succeeded":
+                                    logger.info(f"✅ При повторной проверке платеж {payment_id} имеет статус 'succeeded' - игнорируем canceled")
+                                    return {"ok": True, "event": "payment.canceled", "ignored": "succeeded_on_refresh"}
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка проверки времени создания платежа для защиты: {e}")
                 
                 # Обновляем статус платежа в БД
                 await update_payment_status_async(payment_id, "canceled")
@@ -1296,6 +1336,16 @@ async def yookassa_webhook(request: Request):
                         "Для оплаты нажмите кнопку 💳 Получить доступ и перейдите по новой ссылке."
                     )
                 
+                # ФИНАЛЬНАЯ ПРОВЕРКА ПЕРЕД ОТПРАВКОЙ: еще раз проверяем статус из API
+                # Это защита от race condition - если платеж стал succeeded между проверками
+                try:
+                    final_payment_check = Payment.find_one(payment_id)
+                    if final_payment_check.status == "succeeded":
+                        logger.info(f"✅ ФИНАЛЬНАЯ ПРОВЕРКА: Платеж {payment_id} имеет статус 'succeeded' - игнорируем canceled")
+                        return {"ok": True, "event": "payment.canceled", "ignored": "succeeded_on_final_check"}
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка финальной проверки статуса платежа: {e}")
+                
                 # ПРОВЕРЯЕМ: есть ли у пользователя активная подписка
                 has_active = await has_active_subscription(tg_user_id)
                 
@@ -1315,7 +1365,8 @@ async def yookassa_webhook(request: Request):
                 
                 if has_active:
                     # Если доступ активен - не отправляем уведомление об отмене старого платежа
-                    logger.info(f"ℹ️ Платеж {payment_id} отменен, но у пользователя {tg_user_id} уже есть активный доступ - уведомление не отправлено")
+                    logger.info(f"✅ Платеж {payment_id} отменен, но у пользователя {tg_user_id} уже есть активный доступ - уведомление не отправлено")
+                    return {"ok": True, "event": "payment.canceled", "ignored": "user_has_active_subscription"}
                 elif message_text:
                     # Уведомляем пользователя если есть текст сообщения
                     try:
