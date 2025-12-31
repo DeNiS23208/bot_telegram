@@ -146,10 +146,10 @@ def clear_old_data():
             cur.execute("DELETE FROM processed_payments")
             print(f"✅ Очищена таблица processed_payments ({payments_count} записей)")
         
-        # Очищаем users (опционально, можно оставить для истории)
-        # if users_count > 0:
-        #     cur.execute("DELETE FROM users")
-        #     print(f"✅ Очищена таблица users ({users_count} записей)")
+        # Очищаем users (ВАЖНО: удаляем всех пользователей для полной очистки)
+        if users_count > 0:
+            cur.execute("DELETE FROM users")
+            print(f"✅ Очищена таблица users ({users_count} записей)")
     
     conn.commit()
     conn.close()
