@@ -394,6 +394,7 @@ async def update_payment_status_async(payment_id: str, status: str):
 
 async def has_active_subscription(telegram_id: int) -> bool:
     """Проверяет, есть ли у пользователя активная подписка"""
+    from datetime import timezone
     async with aiosqlite.connect(DB_PATH) as db_conn:
         cursor = await db_conn.execute(
             "SELECT expires_at FROM subscriptions WHERE telegram_id = ?",
@@ -405,8 +406,13 @@ async def has_active_subscription(telegram_id: int) -> bool:
             return False
         
         try:
+            from datetime import timezone
             expires_at = datetime.fromisoformat(row[0])
-            return expires_at > datetime.utcnow()
+            # Если expires_at не имеет timezone, добавляем UTC
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            return expires_at > now
         except ValueError:
             return False
 
@@ -1579,11 +1585,11 @@ async def yookassa_webhook(request: Request):
             
             # Определяем текст в зависимости от режима (бонусная неделя или продакшн)
             if is_bonus_week_active():
-                bonus_duration = dni_prazdnika / 1440  # В днях
                 auto_renewal_text = (
-                    f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(bonus_duration)}.\n\n"
+                    f"🔄 <b>Автопродление включено</b>\n\n"
                     f"⚠️ <b>После окончания бонусной недели:</b>\n"
                     f"• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+                    f"• Доступ будет автоматически продлеваться каждые <b>30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
             else:
