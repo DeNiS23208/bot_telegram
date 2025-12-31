@@ -642,6 +642,86 @@ async def check_subscriptions_expiring_soon():
             await asyncio.sleep(CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS)
 
 
+async def check_bonus_week_transition_to_production():
+    """Проверяет переход в продакшн режим после окончания бонусной недели и отправляет уведомления"""
+    notified_users_production = set()  # Чтобы не отправлять несколько раз одному пользователю
+    
+    while True:
+        try:
+            await asyncio.sleep(60)  # Проверяем каждую минуту
+            
+            # Проверяем, закончилась ли бонусная неделя (прошло более 1 минуты после окончания)
+            if is_bonus_week_active():
+                notified_users_production.clear()
+                continue
+            
+            from config import get_bonus_week_end
+            bonus_week_end = get_bonus_week_end()
+            if bonus_week_end.tzinfo is None:
+                bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+            
+            now = datetime.now(timezone.utc)
+            time_since_bonus_end = (now - bonus_week_end).total_seconds() / 60
+            
+            # Отправляем уведомление только если прошло более 1 минуты после окончания бонусной недели
+            # и не более 5 минут (чтобы не отправлять старые уведомления)
+            if 1 <= time_since_bonus_end <= 5:
+                logger.info(f"🔔 Время для уведомления о переходе в продакшн режим: прошло {time_since_bonus_end:.1f} минут после окончания бонусной недели")
+                
+                # Получаем всех пользователей с активными подписками из бонусной недели
+                from db import get_all_active_subscriptions
+                active_subs = await get_all_active_subscriptions()
+                
+                for telegram_id, expires_at_str in active_subs:
+                    if telegram_id in notified_users_production:
+                        continue
+                    
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at_str)
+                        if expires_at.tzinfo is None:
+                            expires_at = expires_at.replace(tzinfo=timezone.utc)
+                        
+                        # Проверяем, что это подписка из бонусной недели (истекает до или в момент окончания)
+                        if expires_at <= bonus_week_end or (expires_at - bonus_week_end).total_seconds() / 60 <= 2:
+                            # Отправляем уведомление о переходе в продакшн режим
+                            from db import is_auto_renewal_enabled
+                            auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
+                            
+                            if auto_renewal_enabled:
+                                notification_text = (
+                                    "🎉 <b>Бонусная неделя закончилась!</b>\n\n"
+                                    "✅ Бот перешел в продакшн режим.\n\n"
+                                    "🔄 <b>Автопродление:</b>\n"
+                                    "• Система автоматически попытается списать полную стоимость: <b>2990 рублей на 30 дней</b>\n"
+                                    "• Если списание успешно, вы получите уведомление\n"
+                                    "• Если списание не удалось, вы получите уведомление и будете удалены из канала\n\n"
+                                    "⚙️ Вы можете управлять автопродлением в меню «Управление доступом»."
+                                )
+                            else:
+                                notification_text = (
+                                    "🎉 <b>Бонусная неделя закончилась!</b>\n\n"
+                                    "✅ Бот перешел в продакшн режим.\n\n"
+                                    "⚠️ <b>Автопродление отключено:</b>\n"
+                                    "• Ваш доступ в канал закончится\n"
+                                    "• Для возобновления доступа используйте кнопку 💳 Получить доступ"
+                                )
+                            
+                            await safe_send_message(
+                                bot=bot,
+                                chat_id=telegram_id,
+                                text=notification_text,
+                                parse_mode="HTML"
+                            )
+                            notified_users_production.add(telegram_id)
+                            logger.info(f"✅ Отправлено уведомление о переходе в продакшн режим пользователю {telegram_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка отправки уведомления о переходе в продакшн режим пользователю {telegram_id}: {e}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновой задаче проверки перехода в продакшн режим: {e}")
+            await asyncio.sleep(60)
+
+
 async def check_bonus_week_ending_soon():
     """Проверяет окончание бонусной недели и отправляет уведомления за vremya_sms до окончания"""
     notified_users = set()  # Чтобы не отправлять несколько раз одному пользователю
@@ -834,7 +914,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                    continue
+                        continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
@@ -982,8 +1062,8 @@ async def check_expired_subscriptions():
                                 from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
-                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                        
+                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                                
                                 # Определяем цену и длительность для автопродления
                                 # КРИТИЧЕСКИ ВАЖНО: Автопродление для бонусных подписок должно срабатывать ТОЛЬКО при окончании бонусной недели
                                 # Если бонусная неделя еще активна и это бонусная подписка, НЕ делаем автопродление - ждем окончания бонусной недели
@@ -2125,12 +2205,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (поддерживаются: {', '.join(supported_types)})")
             payment_method_id = None  # Не сохраняем для неподдерживаемых типов
         else:
-        from db import save_payment_method, set_auto_renewal
-        await save_payment_method(tg_user_id, payment_method_id)
+            from db import save_payment_method, set_auto_renewal
+            await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-        await set_auto_renewal(tg_user_id, True)
+            await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
             
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
@@ -2151,7 +2231,7 @@ async def yookassa_webhook(request: Request):
                     f"• Доступ будет автоматически продлеваться каждые <b>30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
-    else:
+            else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                 )
@@ -2254,18 +2334,18 @@ async def yookassa_webhook(request: Request):
                 )
         
         if not invite_link:
-                # Если и это не получилось, пробуем основную ссылку канала
+            # Если и это не получилось, пробуем основную ссылку канала
             logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
-                try:
-                    chat = await bot.get_chat(CHANNEL_ID)
-                    if chat.invite_link:
-                        invite_link = chat.invite_link
+            try:
+                chat = await bot.get_chat(CHANNEL_ID)
+                if chat.invite_link:
+                    invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                    else:
-                        raise Exception("У канала нет основной ссылки")
-                except Exception as e3:
+                else:
+                    raise Exception("У канала нет основной ссылки")
+            except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                    raise e3
+                raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
