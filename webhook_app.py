@@ -1893,12 +1893,28 @@ async def yookassa_webhook(request: Request):
             )
             logger.info(f"📝 Текст уведомления (первые 200 символов): {notification_text[:200]}...")
             
-            # Проверяем статус подписки перед отправкой
+            # КРИТИЧЕСКИ ВАЖНО: Проверяем и принудительно обновляем меню ПЕРЕД отправкой первого сообщения
             has_active_check = await has_active_subscription(tg_user_id)
-            menu_buttons_before = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
-            logger.info(f"🔍 Проверка меню перед отправкой: has_active={has_active_check}, menu_keyboard={menu_buttons_before}")
+            logger.info(f"🔍 Проверка перед отправкой: has_active={has_active_check}, is_bonus_week_active={is_bonus_week_active()}")
             
-            # Отправляем сообщение об успешной оплате с меню
+            # Если бонусная неделя активна и подписка активна - ПРИНУДИТЕЛЬНО создаем правильное меню
+            if is_bonus_week_active() and has_active_check:
+                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+                BTN_MANAGE_SUB = "⚙️ Управление доступом"
+                BTN_ABOUT_1 = "ℹ️ О проекте"
+                menu = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text=BTN_MANAGE_SUB)],
+                        [KeyboardButton(text=BTN_ABOUT_1)],
+                    ],
+                    resize_keyboard=True,
+                )
+                logger.info(f"✅ ПРИНУДИТЕЛЬНО создано меню с 'Управление доступом' ПЕРЕД отправкой сообщения об оплате для пользователя {tg_user_id}")
+            
+            menu_buttons_before = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
+            logger.info(f"🔍 Меню перед отправкой: {menu_buttons_before}")
+            
+            # Отправляем сообщение об успешной оплате с ПРАВИЛЬНЫМ меню
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
