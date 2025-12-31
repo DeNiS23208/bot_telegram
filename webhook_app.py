@@ -759,7 +759,10 @@ async def check_expired_subscriptions():
                     
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
-                    now = datetime.utcnow()
+                    # Убеждаемся, что expires_at имеет timezone
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    now = datetime.now(timezone.utc)
                     
                     logger.info(f"⏰ Пользователь {telegram_id}: expires_at={expires_at}, now={now}, разница={(now - expires_at).total_seconds()} секунд")
                     

@@ -132,7 +132,11 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     # Определяем, какая кнопка показывается: "Получить доступ" или "Управление доступом"
     if telegram_id:
         expires_at = await get_subscription_expires_at(telegram_id)
-        now = datetime.utcnow()
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        # Убеждаемся, что expires_at имеет timezone для сравнения
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         has_active_subscription = expires_at and expires_at > now
         
         # Проверяем, включено ли автопродление
