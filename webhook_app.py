@@ -758,8 +758,9 @@ async def check_expired_subscriptions():
                 expires_at_str = row[1]
                 auto_renewal_enabled = bool(row[2]) if len(row) > 2 else False
                 saved_payment_method_id = row[3] if len(row) > 3 and row[3] else None
+                starts_at_str = row[4] if len(row) > 4 and row[4] else None  # Время начала подписки
                 
-                logger.info(f"📋 Обработка подписки пользователя {telegram_id}: expires_at={expires_at_str}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
+                logger.info(f"📋 Обработка подписки пользователя {telegram_id}: expires_at={expires_at_str}, starts_at={starts_at_str}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                 
                 # Проверяем, был ли пользователь обработан недавно (в течение последних 2 минут)
                 if telegram_id in processed_users:
