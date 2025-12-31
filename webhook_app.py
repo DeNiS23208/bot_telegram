@@ -1581,12 +1581,29 @@ async def yookassa_webhook(request: Request):
     else:
         logger.warning(f"⚠️ payment_method отсутствует или None для платежа {payment_id} - это нормально для SberPay и СБП")
     
-    # ВАЖНО: Активируем подписку для ВСЕХ типов платежей (SberPay, СБП, карта)
+    # ВАЖНО: Активируем подписку для ВСЕХ типов платежей (SberPay, СБП, банковская карта)
     # независимо от наличия или типа payment_method
     # разрешаем пользователю вступление
     await allow_user(tg_user_id)
     
-    # Активируем подписку СРАЗУ после успешного платежа (для всех типов)
+    # ЛОГИРУЕМ тип платежа для диагностики
+    payment_type_name = "неизвестен"
+    if payment_method_type:
+        pm_type_lower = payment_method_type.lower()
+        if pm_type_lower == 'sbp':
+            payment_type_name = "СБП"
+        elif pm_type_lower in ['sberbank', 'sberpay']:
+            payment_type_name = "SberPay"
+        elif pm_type_lower in ['bank_card', 'card']:
+            payment_type_name = "Банковская карта"
+        else:
+            payment_type_name = payment_method_type
+    else:
+        payment_type_name = "без payment_method (возможно СБП или SberPay)"
+    
+    logger.info(f"💳 Обработка платежа типа: {payment_type_name} для пользователя {tg_user_id}")
+    
+    # Активируем подписку СРАЗУ после успешного платежа (для ВСЕХ типов: SberPay, СБП, карта)
     # Определяем длительность в зависимости от режима (бонусная неделя или продакшн)
     if is_bonus_week_active():
         # Бонусная неделя: используем ОСТАВШЕЕСЯ время до конца бонусной недели
@@ -1605,7 +1622,7 @@ async def yookassa_webhook(request: Request):
         subscription_duration = SUBSCRIPTION_DAYS
     
     await activate_subscription(tg_user_id, days=subscription_duration)
-    logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(subscription_duration)} (тип платежа: {payment_method_type or 'неизвестен/отсутствует'})")
+    logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(subscription_duration)} (тип платежа: {payment_type_name})")
     
     # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш подписки сразу после активации
     from db import _clear_cache
