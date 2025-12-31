@@ -1783,14 +1783,15 @@ async def yookassa_webhook(request: Request):
                 "• Не передавайте ссылку другим людям - она работает только для вас"
             )
             logger.info(f"📝 Текст уведомления (первые 200 символов): {notification_text[:200]}...")
+            logger.info(f"🔍 Проверка меню перед отправкой: has_active={await has_active_subscription(tg_user_id)}, menu_keyboard={[btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'}")
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
                 text=notification_text,
                 parse_mode="HTML",
-            reply_markup=menu
-        )
-            logger.info(f"✅ Сообщение об успешной оплате отправлено пользователю {tg_user_id}")
+                reply_markup=menu
+            )
+            logger.info(f"✅ Сообщение об успешной оплате отправлено пользователю {tg_user_id} с меню: {[btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'}")
         except Exception as send_error:
             logger.error(f"❌ Ошибка отправки сообщения об успешной оплате пользователю {tg_user_id}: {send_error}")
             import traceback
