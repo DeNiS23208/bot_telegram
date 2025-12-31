@@ -1646,7 +1646,10 @@ async def yookassa_webhook(request: Request):
     if event != "payment.succeeded":
         return {"ok": True, "event": event}
 
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, был ли платеж уже обработан
+    # Это предотвращает дублирование уведомлений и повторную активацию подписки
     if await already_processed(payment_id):
+        logger.warning(f"⚠️ Платеж {payment_id} уже был обработан ранее - пропускаем повторную обработку")
         return {"ok": True, "duplicate": True}
 
     # Получаем актуальный статус платежа из API
