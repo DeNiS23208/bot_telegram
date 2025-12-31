@@ -664,6 +664,8 @@ async def sub_status(message: Message):
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_ABOUT_1)
 async def about(message: Message):
+    # КРИТИЧЕСКИ ВАЖНО: Используем main_menu, которая правильно проверяет наличие активной подписки
+    # и показывает "Управление доступом" если подписка активна, даже во время бонусной недели
     await message.answer(
         "📖 <b>О проекте</b>\n\n"
         "Это бот для доступа к закрытому Telegram-каналу.\n\n"
@@ -676,7 +678,7 @@ async def about(message: Message):
         "• Автопродление доступа\n"
         "• Мгновенный доступ к контенту",
         parse_mode="HTML",
-        reply_markup=await main_menu(message.from_user.id) if not is_bonus_week_active() else await bonus_week_menu()
+        reply_markup=await main_menu(message.from_user.id)
     )
 
 
