@@ -1532,12 +1532,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (поддерживаются: {', '.join(supported_types)})")
             payment_method_id = None  # Не сохраняем для неподдерживаемых типов
         else:
-        from db import save_payment_method, set_auto_renewal
-        await save_payment_method(tg_user_id, payment_method_id)
+            from db import save_payment_method, set_auto_renewal
+            await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-        await set_auto_renewal(tg_user_id, True)
+            await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
             
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
@@ -1635,18 +1635,18 @@ async def yookassa_webhook(request: Request):
                 )
         
         if not invite_link:
-                # Если и это не получилось, пробуем основную ссылку канала
+            # Если и это не получилось, пробуем основную ссылку канала
             logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
-                try:
-                    chat = await bot.get_chat(CHANNEL_ID)
-                    if chat.invite_link:
-                        invite_link = chat.invite_link
+            try:
+                chat = await bot.get_chat(CHANNEL_ID)
+                if chat.invite_link:
+                    invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                    else:
-                        raise Exception("У канала нет основной ссылки")
-                except Exception as e3:
+                else:
+                    raise Exception("У канала нет основной ссылки")
+            except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                    raise e3
+                raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
