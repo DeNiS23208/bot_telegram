@@ -2082,7 +2082,7 @@ async def yookassa_webhook(request: Request):
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-        await set_auto_renewal(tg_user_id, True)
+            await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
             
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
