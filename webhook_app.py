@@ -289,10 +289,15 @@ async def revoke_invite_link(invite_link: str):
 
 async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     """Создает главное меню для пользователя с учетом статуса подписки"""
+    # ВАЖНО: Очищаем кэш перед проверкой, чтобы получить актуальные данные
+    from db import _clear_cache
+    _clear_cache()
+    
     # Если активна бонусная неделя, показываем специальное меню
     if is_bonus_week_active():
         # Проверяем, есть ли активная подписка (даже в бонусной неделе)
         # Используем функцию из webhook_app.py, а не из db.py
+        # ВАЖНО: Проверяем напрямую в БД для гарантии актуальности
         has_active = await has_active_subscription(telegram_id)
         logger.info(f"🔍 get_main_menu_for_user: telegram_id={telegram_id}, is_bonus_week_active={is_bonus_week_active()}, has_active={has_active}")
         
