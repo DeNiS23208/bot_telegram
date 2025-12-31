@@ -1359,18 +1359,45 @@ async def manage_subscription(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == "◀️ Назад в меню" or (m.text or "").strip() == BTN_BACK_TO_MENU)
 async def back_to_main_menu(message: Message):
     """Возврат в главное меню"""
+    user_id = message.from_user.id
     if is_bonus_week_active():
+        # В бонусной неделе проверяем, есть ли активная подписка
+        from db import get_subscription_expires_at
+        from datetime import timezone
+        expires_at = await get_subscription_expires_at(user_id)
+        now = datetime.now(timezone.utc)
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        has_active = expires_at and expires_at > now
+        
+        if has_active:
+            # Если есть активная подписка, показываем меню с "Управление доступом"
+            BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+            keyboard = [
+                [KeyboardButton(text=BTN_MANAGE_SUB)],
+                [KeyboardButton(text=BTN_ABOUT_1)],
+            ]
+            menu = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+            await message.answer(
+                "📋 <b>Главное меню</b>",
+                parse_mode="HTML",
+                reply_markup=menu
+            )
+        else:
+            # Если нет активной подписки, показываем бонусное меню
+            await message.answer(
+                "📋 <b>Главное меню</b>",
+                parse_mode="HTML",
+                reply_markup=await bonus_week_menu()
+            )
+    else:
         await message.answer(
             "📋 <b>Главное меню</b>",
             parse_mode="HTML",
-        reply_markup=await bonus_week_menu()
-    )
-    else:
-        await message.answer(
-        "📋 <b>Главное меню</b>",
-        parse_mode="HTML",
-        reply_markup=await main_menu(message.from_user.id)
-    )
+            reply_markup=await main_menu(user_id)
+        )
 
 
 # Обработчик для кнопки "Отказаться от автопродления" (в бонусной неделе)
