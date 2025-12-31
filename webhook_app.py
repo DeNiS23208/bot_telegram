@@ -2205,15 +2205,15 @@ async def yookassa_webhook(request: Request):
     if payment_method_id:
         # Проверяем, поддерживается ли тип платежного метода
         if payment_method_type and payment_method_type.lower() in supported_types:
-            # Для поддерживаемых типов включаем автопродление, даже если saved=False (для СБП и SberPay)
-            should_enable_auto_renewal = True
-            logger.info(f"✅ Тип платежного метода {payment_method_type} поддерживает автопродление - будет включено (saved={payment_method_saved})")
-        elif payment_method_saved:
-            # Если saved=True, включаем автопродление независимо от типа
-            should_enable_auto_renewal = True
-            logger.info(f"✅ payment_method_saved=True - автопродление будет включено")
-    
-    if should_enable_auto_renewal:
+            # Для поддерживаемых типов ВСЕГДА включаем автопродление (данные всегда сохраняются при оплате по договору с ЮKassa)
+            from db import save_payment_method, set_auto_renewal
+            await save_payment_method(tg_user_id, payment_method_id)
+            logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
+            
+            # Включаем автопродление
+            await set_auto_renewal(tg_user_id, True)
+            logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (тип: {payment_method_type}, данные всегда сохраняются при оплате)")
+            
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
             payment_method_name = "карта"  # По умолчанию
             if payment_method_type:
