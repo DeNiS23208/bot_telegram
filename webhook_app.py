@@ -1185,23 +1185,28 @@ async def check_expired_subscriptions():
                                     if not payment_created_recently:
                                         logger.warning(f"⚠️ Пропуск отправки уведомления об автопродлении: платеж {payment_id} был создан более 5 минут назад (возможно, это старый платеж)")
                                         continue
-                                    elif await already_processed(auto_renewal_notification_key):
+                                    
+                                    # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, не отправляли ли мы уже уведомление
+                                    # ВАЖНО: Проверяем ДО отправки, чтобы предотвратить дублирование
+                                    if await already_processed(auto_renewal_notification_key):
                                         logger.warning(f"⚠️ Уведомление об автопродлении для платежа {payment_id} уже было отправлено пользователю {telegram_id} - пропускаем")
                                         continue
-                                    else:
-                                        # Отправляем уведомление об успешном автопродлении
-                                        await safe_send_message(
-                                            bot=bot,
-                                            chat_id=telegram_id,
-                                            text="✅ Доступ автоматически продлен!\n\n"
-                                                f"Списано {auto_amount} {ruble_text} {payment_method_text}.\n"
-                                                f"Доступ продлен на {format_subscription_duration(auto_duration)}.\n\n"
-                                                "Спасибо за использование автопродления!"
-                                        )
-                                        
-                                        # Помечаем уведомление как отправленное
-                                        await mark_processed(auto_renewal_notification_key)
-                                        logger.info(f"✅ Уведомление об автопродлении помечено как отправленное для платежа {payment_id}, пользователь {telegram_id}")
+                                    
+                                    # КРИТИЧЕСКИ ВАЖНО: Помечаем уведомление как отправленное ДО отправки
+                                    # Это предотвращает race condition и дублирование уведомлений
+                                    await mark_processed(auto_renewal_notification_key)
+                                    logger.info(f"✅ Уведомление об автопродлении помечено как отправленное ДО отправки для платежа {payment_id}, пользователь {telegram_id}")
+                                    
+                                    # Отправляем уведомление об успешном автопродлении
+                                    await safe_send_message(
+                                        bot=bot,
+                                        chat_id=telegram_id,
+                                        text="✅ Доступ автоматически продлен!\n\n"
+                                            f"Списано {auto_amount} {ruble_text} {payment_method_text}.\n"
+                                            f"Доступ продлен на {format_subscription_duration(auto_duration)}.\n\n"
+                                            "Спасибо за использование автопродления!"
+                                    )
+                                    logger.info(f"✅ Уведомление об автопродлении отправлено пользователю {telegram_id} для платежа {payment_id}")
                                         
                                         # ВАЖНО: Отправляем обновленное меню после успешного автопродления
                                         # Особенно важно, если бонусная неделя закончилась и перешли в продакшн режим
