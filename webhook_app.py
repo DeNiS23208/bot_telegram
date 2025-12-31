@@ -1556,6 +1556,10 @@ async def yookassa_webhook(request: Request):
     from db import _clear_cache
     _clear_cache()
     
+    # Проверяем, что подписка действительно активна после активации
+    has_active_after = await has_active_subscription(tg_user_id)
+    logger.info(f"🔍 Проверка после активации: has_active_subscription({tg_user_id}) = {has_active_after}")
+    
     # Сохраняем payment_method_id и автоматически включаем автопродление
     # ВАЖНО: Автопродление включаем если:
     # 1. payment_method_id есть
@@ -1743,8 +1747,14 @@ async def yookassa_webhook(request: Request):
         # Очищаем кэш еще раз перед получением меню, чтобы гарантировать актуальные данные
         from db import _clear_cache
         _clear_cache()
+        
+        # Проверяем статус подписки перед получением меню
+        has_active_check = await has_active_subscription(tg_user_id)
+        logger.info(f"🔍 Проверка перед получением меню: has_active_subscription({tg_user_id}) = {has_active_check}, is_bonus_week_active() = {is_bonus_week_active()}")
+        
         menu = await get_main_menu_for_user(tg_user_id)
-        logger.info(f"🔍 Меню для пользователя {tg_user_id} после оплаты: {menu.keyboard if hasattr(menu, 'keyboard') else 'N/A'}")
+        menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
+        logger.info(f"🔍 Меню для пользователя {tg_user_id} после оплаты: {menu_buttons}")
         
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
         duration_text = format_subscription_duration(subscription_duration)
