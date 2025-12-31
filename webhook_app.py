@@ -777,7 +777,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                        continue
+                    continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
@@ -832,6 +832,16 @@ async def check_expired_subscriptions():
                         
                         bonus_week_ended = not is_bonus_week_active()
                         
+                        # КРИТИЧЕСКАЯ ПРОВЕРКА: Если подписка истекает точно в момент окончания бонусной недели,
+                        # и бонусная неделя уже закончилась, это тоже считается окончанием бонусной недели
+                        if not bonus_week_ended and expires_at and bonus_week_end:
+                            # Проверяем, истекла ли подписка в момент или после окончания бонусной недели
+                            time_diff_from_bonus_end = (expires_at - bonus_week_end).total_seconds() / 60
+                            if -1 <= time_diff_from_bonus_end <= 1:  # Подписка истекает в течение 1 минуты от окончания бонусной недели
+                                # Считаем, что бонусная неделя закончилась для этого пользователя
+                                bonus_week_ended = True
+                                logger.info(f"🔍 Подписка пользователя {telegram_id} истекает в момент окончания бонусной недели (разница: {time_diff_from_bonus_end:.1f} мин) - считаем, что бонусная неделя закончилась")
+                        
                         logger.info(f"🔍 Пользователь {telegram_id}: bonus_week_ended={bonus_week_ended}, is_bonus_subscription={is_bonus_subscription}, starts_at={starts_at_str}, expires_at={expires_at}, bonus_week_start={bonus_week_start}, bonus_week_end={bonus_week_end}, now={now}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                         
                         # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД
@@ -855,8 +865,8 @@ async def check_expired_subscriptions():
                                 from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
-                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                                
+                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                        
                                 # Определяем цену и длительность для автопродления
                                 # КРИТИЧЕСКИ ВАЖНО: Автопродление для бонусных подписок должно срабатывать ТОЛЬКО при окончании бонусной недели
                                 # Если бонусная неделя еще активна и это бонусная подписка, НЕ делаем автопродление - ждем окончания бонусной недели
@@ -1113,12 +1123,16 @@ async def check_expired_subscriptions():
                             logger.info(f"🚫 Автопродление не работает для пользователя {telegram_id}: auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}, failed={auto_payment_failed}")
                             
                             # Проверяем, активна ли бонусная неделя и является ли это подписка из бонусной недели
-                            bonus_week_end = get_bonus_week_end()
-                            is_bonus_subscription = expires_at <= bonus_week_end if expires_at else False
+                            bonus_week_end_check = get_bonus_week_end()
+                            if bonus_week_end_check.tzinfo is None:
+                                bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
+                            is_bonus_subscription_check = expires_at <= bonus_week_end_check if expires_at else False
+                            bonus_week_still_active = is_bonus_week_active()
                             
                             # Если это подписка из бонусной недели и автопродление отключено, НЕ баним до окончания бонусной недели
-                            if is_bonus_subscription and not auto_renewal_enabled and not auto_payment_failed:
-                                logger.info(f"ℹ️ Пользователь {telegram_id} имеет подписку из бонусной недели с отключенным автопродлением - не баним до окончания бонусной недели")
+                            # НО: Если бонусная неделя уже закончилась, баним даже если это была бонусная подписка
+                            if is_bonus_subscription_check and not auto_renewal_enabled and not auto_payment_failed and bonus_week_still_active:
+                                logger.info(f"ℹ️ Пользователь {telegram_id} имеет подписку из бонусной недели с отключенным автопродлением - не баним до окончания бонусной недели (бонусная неделя еще активна)")
                             else:
                                 # Отзываем ссылку пользователя (делаем её невалидной)
                                 from db import get_invite_link
@@ -1945,12 +1959,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (поддерживаются: {', '.join(supported_types)})")
             payment_method_id = None  # Не сохраняем для неподдерживаемых типов
         else:
-            from db import save_payment_method, set_auto_renewal
-            await save_payment_method(tg_user_id, payment_method_id)
+        from db import save_payment_method, set_auto_renewal
+        await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-            await set_auto_renewal(tg_user_id, True)
+        await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
             
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
@@ -1971,7 +1985,7 @@ async def yookassa_webhook(request: Request):
                     f"• Доступ будет автоматически продлеваться каждые <b>30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
-            else:
+    else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                 )
@@ -2074,18 +2088,18 @@ async def yookassa_webhook(request: Request):
                 )
         
         if not invite_link:
-            # Если и это не получилось, пробуем основную ссылку канала
+                # Если и это не получилось, пробуем основную ссылку канала
             logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
-            try:
-                chat = await bot.get_chat(CHANNEL_ID)
-                if chat.invite_link:
-                    invite_link = chat.invite_link
+                try:
+                    chat = await bot.get_chat(CHANNEL_ID)
+                    if chat.invite_link:
+                        invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                else:
-                    raise Exception("У канала нет основной ссылки")
-            except Exception as e3:
+                    else:
+                        raise Exception("У канала нет основной ссылки")
+                except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                raise e3
+                    raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
