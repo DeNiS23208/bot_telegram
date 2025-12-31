@@ -933,6 +933,18 @@ async def check_expired_subscriptions():
                                         auto_payment_failed = True
                                         continue
                                     
+                                    # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, что это НЕ повторная обработка того же платежа
+                                    # Используем processed_payments для отслеживания уже обработанных автоплатежей
+                                    auto_payment_key = f"auto_payment_{payment_id}_{telegram_id}"
+                                    if await already_processed(auto_payment_key):
+                                        logger.warning(f"⚠️ КРИТИЧЕСКИЙ БАГ ПРЕДОТВРАЩЕН: Автоплатеж {payment_id} для пользователя {telegram_id} уже был обработан ранее - пропускаем повторную обработку")
+                                        auto_payment_failed = True
+                                        continue
+                                    
+                                    # Помечаем автоплатеж как обработанный ДО активации подписки
+                                    await mark_processed(auto_payment_key)
+                                    logger.info(f"✅ Автоплатеж {payment_id} помечен как обработанный для пользователя {telegram_id}")
+                                    
                                     # Используем ту же длительность, что и для платежа
                                     await activate_subscription_days(telegram_id, days=auto_duration)
                                     auto_payment_succeeded = True  # Помечаем, что автопродление успешно
@@ -1759,23 +1771,59 @@ async def yookassa_webhook(request: Request):
     
     # Активируем подписку СРАЗУ после успешного платежа (для ВСЕХ типов: SberPay, СБП, карта)
     # Определяем длительность в зависимости от режима (бонусная неделя или продакшн)
+    remaining_time = None
+    bonus_end = None
     if is_bonus_week_active():
         # Бонусная неделя: используем ОСТАВШЕЕСЯ время до конца бонусной недели
+        # ВАЖНО: expires_at должен быть равен bonus_week_end, а не starts_at + dni_prazdnika
         from datetime import timezone as tz
         now = datetime.now(tz.utc)
         bonus_end = get_bonus_week_end()
+        # Убеждаемся, что bonus_end имеет timezone
+        if bonus_end.tzinfo is None:
+            bonus_end = bonus_end.replace(tzinfo=timezone.utc)
         remaining_time = bonus_end - now
         if remaining_time.total_seconds() <= 0:
             # Бонусная неделя уже закончилась - используем продакшн
             subscription_duration = SUBSCRIPTION_DAYS
+            logger.info(f"⚠️ Бонусная неделя уже закончилась для пользователя {tg_user_id}, используем продакшн длительность: {subscription_duration} дней")
         else:
             # Конвертируем секунды в дни
             subscription_duration = remaining_time.total_seconds() / 86400
+            logger.info(f"🎁 Бонусная неделя активна для пользователя {tg_user_id}, оставшееся время: {remaining_time.total_seconds() / 60:.1f} минут ({subscription_duration:.6f} дней), bonus_end={bonus_end.isoformat()}, now={now.isoformat()}")
     else:
         # Продакшн режим: используем обычную длительность
         subscription_duration = SUBSCRIPTION_DAYS
+        logger.info(f"💼 Продакшн режим для пользователя {tg_user_id}, длительность: {subscription_duration} дней")
     
-    await activate_subscription(tg_user_id, days=subscription_duration)
+    # ВАЖНО: Для бонусной недели устанавливаем expires_at = bonus_week_end напрямую
+    if is_bonus_week_active() and remaining_time and remaining_time.total_seconds() > 0:
+        # Устанавливаем expires_at = bonus_week_end напрямую, чтобы не было проблем с округлением
+        starts_at = datetime.now(timezone.utc)
+        expires_at = bonus_end  # Используем конец бонусной недели напрямую
+        
+        async with aiosqlite.connect(DB_PATH) as db_conn:
+            # гарантируем, что юзер существует
+            await db_conn.execute(
+                "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
+                (tg_user_id, None, datetime.now(timezone.utc).isoformat())
+            )
+            
+            # upsert подписки (сохраняем дату начала и окончания)
+            await db_conn.execute(
+                """
+                INSERT INTO subscriptions (telegram_id, expires_at, starts_at, subscription_expired_notified)
+                VALUES (?, ?, ?, 0) ON CONFLICT(telegram_id) DO
+                UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at,
+                           subscription_expired_notified=0
+                """,
+                (tg_user_id, expires_at.isoformat(), starts_at.isoformat())
+            )
+            await db_conn.commit()
+            logger.info(f"💾 Подписка сохранена в БД (бонусная неделя): telegram_id={tg_user_id}, expires_at={expires_at.isoformat()}, starts_at={starts_at.isoformat()}")
+    else:
+        # Для продакшн режима используем обычную активацию
+        await activate_subscription(tg_user_id, days=subscription_duration)
     logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(subscription_duration)} (тип платежа: {payment_type_name})")
     
     # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш подписки сразу после активации
