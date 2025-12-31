@@ -333,7 +333,10 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     # Проверяем наличие активной подписки
     from db import get_subscription_expires_at, is_auto_renewal_enabled
     expires_at = await get_subscription_expires_at(telegram_id)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    # Убеждаемся, что expires_at имеет timezone для сравнения
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
     has_active_subscription = expires_at and expires_at > now
     
     # Проверяем, включено ли автопродление
@@ -582,6 +585,11 @@ async def check_subscriptions_expiring_soon():
         try:
             await asyncio.sleep(CHECK_EXPIRING_SUBSCRIPTIONS_INTERVAL_SECONDS)
             
+            # ВАЖНО: Не отправляем уведомления во время бонусной недели
+            # Уведомления о конце бонусной недели отправляются отдельной функцией check_bonus_week_ending_soon
+            if is_bonus_week_active():
+                continue
+            
             # Получаем подписки, которые истекают через N дней
             expiring_subs = await get_subscriptions_expiring_soon()
             
@@ -591,7 +599,9 @@ async def check_subscriptions_expiring_soon():
                     
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc)
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
                     days_left = (expires_at - now).days
                     
                     # Если осталось примерно N дней (с погрешностью ±1 день)
