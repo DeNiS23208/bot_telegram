@@ -796,8 +796,8 @@ async def check_expired_subscriptions():
                                 from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
-                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                        
+                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                                
                                 # Определяем цену и длительность для автопродления
                                 # ВАЖНО: Если бонусная неделя закончилась И это была подписка из бонусной недели, используем продакшн цены
                                 if bonus_week_ended and is_bonus_subscription:
