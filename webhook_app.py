@@ -1785,7 +1785,7 @@ async def yookassa_webhook(request: Request):
         _clear_cache()
         
         # Даем небольшую задержку, чтобы БД точно обновилась
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.2)
         
         # Проверяем статус подписки перед получением меню
         # Проверяем напрямую в БД, чтобы убедиться, что подписка сохранена
@@ -1806,9 +1806,13 @@ async def yookassa_webhook(request: Request):
             else:
                 logger.warning(f"⚠️ Подписка не найдена в БД для пользователя {tg_user_id}!")
         
+        # Очищаем кэш еще раз перед проверкой через функцию
+        _clear_cache()
         has_active_check = await has_active_subscription(tg_user_id)
         logger.info(f"🔍 Проверка через функцию: has_active_subscription({tg_user_id}) = {has_active_check}, is_bonus_week_active() = {is_bonus_week_active()}")
         
+        # Очищаем кэш еще раз перед получением меню
+        _clear_cache()
         menu = await get_main_menu_for_user(tg_user_id)
         menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
         logger.info(f"🔍 Меню для пользователя {tg_user_id} после оплаты: {menu_buttons}")
@@ -1856,7 +1860,7 @@ async def yookassa_webhook(request: Request):
             menu_buttons_before = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
             logger.info(f"🔍 Проверка меню перед отправкой: has_active={has_active_check}, menu_keyboard={menu_buttons_before}")
             
-            # Отправляем сообщение об успешной оплате
+            # Отправляем сообщение об успешной оплате с меню
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
@@ -1872,11 +1876,30 @@ async def yookassa_webhook(request: Request):
             # Получаем меню еще раз для гарантии актуальности
             from db import _clear_cache
             _clear_cache()
+            
+            # Проверяем еще раз напрямую в БД
+            async with aiosqlite.connect(DB_PATH) as db_final_check:
+                cursor_final = await db_final_check.execute(
+                    "SELECT expires_at FROM subscriptions WHERE telegram_id = ?",
+                    (tg_user_id,)
+                )
+                row_final = await cursor_final.fetchone()
+                if row_final and row_final[0]:
+                    from datetime import timezone
+                    expires_at_final = datetime.fromisoformat(row_final[0])
+                    if expires_at_final.tzinfo is None:
+                        expires_at_final = expires_at_final.replace(tzinfo=timezone.utc)
+                    now_final = datetime.now(timezone.utc)
+                    is_active_final = expires_at_final > now_final
+                    logger.info(f"🔍 Финальная проверка БД перед обновлением меню: is_active={is_active_final}")
+            
+            _clear_cache()
             updated_menu = await get_main_menu_for_user(tg_user_id)
             updated_menu_buttons = [btn.text for row in updated_menu.keyboard for btn in row] if hasattr(updated_menu, 'keyboard') else 'N/A'
             logger.info(f"🔍 Обновленное меню для пользователя {tg_user_id}: {updated_menu_buttons}")
             
             # Отправляем сообщение с обновленным меню для принудительного обновления клавиатуры
+            # Используем короткое сообщение, чтобы не перегружать пользователя
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
