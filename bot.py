@@ -283,7 +283,7 @@ async def cmd_start(message: Message):
         )
     else:
         # Обычный текст для продакшн режима
-        welcome_text = (
+    welcome_text = (
         "👋 <b>Добро пожаловать!</b>\n\n"
         "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
         "🎯 Здесь вы можете:\n"
@@ -1122,16 +1122,16 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✅ <b>Оплата подтверждена!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Оплата подтверждена!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
                 parse_mode="HTML"
             )
         else:
@@ -1344,31 +1344,26 @@ async def manage_subscription(message: Message):
             )
             
             # Создаем меню для бонусной недели
-            from db import get_saved_payment_method_id
-            saved_payment_method = await get_saved_payment_method_id(user_id)
-            
+            # Должно быть две кнопки: "Отказаться от автопродления" и "Назад в меню"
             if auto_renewal_enabled:
-                # Показываем кнопки: отключить автопродление и отвязать карту (если карта есть)
-                buttons = [[KeyboardButton(text=BTN_DISABLE_AUTO_RENEWAL)]]
-                if saved_payment_method:
-                    buttons.append([KeyboardButton(text=BTN_REMOVE_CARD)])
-                keyboard = ReplyKeyboardMarkup(
-                    keyboard=buttons,
-                    resize_keyboard=True
-                )
-            elif saved_payment_method:
-                # Автопродление отключено, но карта еще привязана - показываем кнопку отвязки
+                # Показываем кнопки: отключить автопродление и назад в меню
                 keyboard = ReplyKeyboardMarkup(
                     keyboard=[
-                        [KeyboardButton(text=BTN_REMOVE_CARD)]
+                        [KeyboardButton(text=BTN_DISABLE_AUTO_RENEWAL)],
+                        [KeyboardButton(text=BTN_BACK_TO_MENU)]
                     ],
                     resize_keyboard=True
                 )
             else:
-                # Нет кнопок - используем основное меню
-                keyboard = await bonus_week_menu()
+                # Автопродление отключено - показываем только кнопку "Назад в меню"
+                keyboard = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text=BTN_BACK_TO_MENU)]
+                    ],
+                    resize_keyboard=True
+                )
             
-            await message.answer(
+    await message.answer(
                 management_text,
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -1412,9 +1407,9 @@ async def back_to_main_menu(message: Message):
                 [KeyboardButton(text=BTN_ABOUT_1)],
             ]
             menu = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-            await message.answer(
-                "📋 <b>Главное меню</b>",
-                parse_mode="HTML",
+    await message.answer(
+        "📋 <b>Главное меню</b>",
+        parse_mode="HTML",
                 reply_markup=menu
             )
         else:
@@ -1429,7 +1424,7 @@ async def back_to_main_menu(message: Message):
             "📋 <b>Главное меню</b>",
             parse_mode="HTML",
             reply_markup=await main_menu(user_id)
-        )
+    )
 
 
 # Обработчик для кнопки "Отказаться от автопродления" (в бонусной неделе)
@@ -1760,14 +1755,14 @@ async def approve_join_request(join_request: ChatJoinRequest):
             
             if has_active_subscription:
                 # У пользователя есть активная подписка - одобряем заявку
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от пользователя {user_id} (активная подписка до {expires_at})")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
                     import traceback
                     traceback.print_exc()
-            else:
+        else:
                 # Подписка истекла - отклоняем заявку
                 try:
                     await join_request.decline()
