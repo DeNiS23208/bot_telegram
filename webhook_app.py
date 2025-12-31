@@ -2104,6 +2104,7 @@ async def yookassa_webhook(request: Request):
         # Бонусная неделя: используем ОСТАВШЕЕСЯ время до конца бонусной недели
         # ВАЖНО: expires_at должен быть равен bonus_week_end, а не starts_at + dni_prazdnika
         from datetime import timezone as tz
+        from config import get_bonus_week_end
         now = datetime.now(tz.utc)
         bonus_end = get_bonus_week_end()
         # Убеждаемся, что bonus_end имеет timezone
