@@ -357,7 +357,8 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
 async def activate_subscription(telegram_id: int, days: int = 30) -> tuple[datetime, datetime]:
     """Активирует подписку на N дней (асинхронная версия для webhook)
     Возвращает (starts_at, expires_at)"""
-    starts_at = datetime.utcnow()
+    from datetime import timezone
+    starts_at = datetime.now(timezone.utc)
     expires_at = starts_at + timedelta(days=days)
     
     async with aiosqlite.connect(DB_PATH) as db_conn:
