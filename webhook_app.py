@@ -641,6 +641,9 @@ async def check_bonus_week_ending_soon():
             
             now = datetime.now(timezone.utc)
             bonus_week_end = get_bonus_week_end()
+            # Убеждаемся, что bonus_week_end имеет timezone
+            if bonus_week_end.tzinfo is None:
+                bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
             time_until_end = bonus_week_end - now
             minutes_until_end = time_until_end.total_seconds() / 60
             
@@ -648,7 +651,7 @@ async def check_bonus_week_ending_soon():
             # Используем погрешность ±1 минуту для надежности (чтобы не пропустить)
             # Проверяем, что осталось от vremya_sms-1 до vremya_sms+1 минут
             if vremya_sms - 1 <= minutes_until_end <= vremya_sms + 1:
-                logger.info(f"🔔 Время для уведомления о конце бонусной недели: minutes_until_end={minutes_until_end:.1f}, vremya_sms={vremya_sms}")
+                logger.info(f"🔔 Время для уведомления о конце бонусной недели: minutes_until_end={minutes_until_end:.1f}, vremya_sms={vremya_sms}, bonus_week_end={bonus_week_end}, now={now}")
                 for telegram_id, expires_at_str in active_subs:
                     if telegram_id in notified_users:
                         continue
