@@ -765,8 +765,22 @@ async def check_expired_subscriptions():
                         
                         logger.info(f"🔍 Пользователь {telegram_id}: bonus_week_ended={bonus_week_ended}, is_bonus_subscription={is_bonus_subscription}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                         
+                        # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД
+                        # Это предотвращает автопродление для пользователей, которые никогда не платили
+                        async with aiosqlite.connect(DB_PATH) as db_check_payment:
+                            cursor_payment = await db_check_payment.execute(
+                                "SELECT COUNT(*) FROM payments WHERE telegram_id = ? AND status = 'succeeded'",
+                                (telegram_id,)
+                            )
+                            row_payment = await cursor_payment.fetchone()
+                            has_successful_payment = row_payment and row_payment[0] and row_payment[0] > 0
+                        
+                        if not has_successful_payment:
+                            logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: нет успешных платежей в БД (пользователь никогда не платил)")
+                            # Не выполняем автопродление, но продолжаем обработку для бана/уведомлений
+                            auto_payment_failed = True
                         # Проверяем, включено ли автопродление и есть ли сохраненный способ оплаты
-                        if auto_renewal_enabled and saved_payment_method_id:
+                        elif auto_renewal_enabled and saved_payment_method_id:
                             # Пытаемся выполнить автоматическое списание
                             try:
                                 from payments import create_auto_payment, get_payment_status
@@ -821,6 +835,21 @@ async def check_expired_subscriptions():
                                 
                                 # Если платеж успешен (сразу или после ожидания)
                                 if payment_status == "succeeded" and not auto_payment_failed:
+                                    # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД
+                                    # Это гарантирует, что мы не отправляем уведомление пользователям, которые никогда не платили
+                                    async with aiosqlite.connect(DB_PATH) as db_check:
+                                        cursor = await db_check.execute(
+                                            "SELECT COUNT(*) FROM payments WHERE telegram_id = ? AND status = 'succeeded'",
+                                            (telegram_id,)
+                                        )
+                                        row = await cursor.fetchone()
+                                        has_successful_payment = row and row[0] and row[0] > 0
+                                    
+                                    if not has_successful_payment:
+                                        logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: нет успешных платежей в БД (возможно, тестовый платеж или ошибка)")
+                                        auto_payment_failed = True
+                                        continue
+                                    
                                     # Используем ту же длительность, что и для платежа
                                     await activate_subscription_days(telegram_id, days=auto_duration)
                                     auto_payment_succeeded = True  # Помечаем, что автопродление успешно
