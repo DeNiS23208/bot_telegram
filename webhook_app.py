@@ -1836,6 +1836,25 @@ async def yookassa_webhook(request: Request):
         menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
         logger.info(f"🔍 Меню для пользователя {tg_user_id} после оплаты: {menu_buttons}")
         
+        # ВАЖНО: Если меню все еще показывает "Бонус", принудительно создаем меню с "Управление доступом"
+        if is_bonus_week_active() and has_active_check:
+            # Проверяем, что меню действительно содержит "Управление доступом"
+            menu_has_manage = any("Управление доступом" in btn.text for row in menu.keyboard for btn in row)
+            if not menu_has_manage:
+                logger.warning(f"⚠️ Меню не содержит 'Управление доступом', принудительно создаем правильное меню для пользователя {tg_user_id}")
+                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+                BTN_MANAGE_SUB = "⚙️ Управление доступом"
+                BTN_ABOUT_1 = "ℹ️ О проекте"
+                keyboard = [
+                    [KeyboardButton(text=BTN_MANAGE_SUB)],
+                    [KeyboardButton(text=BTN_ABOUT_1)],
+                ]
+                menu = ReplyKeyboardMarkup(
+                    keyboard=keyboard,
+                    resize_keyboard=True,
+                )
+                logger.info(f"✅ Принудительно создано меню с 'Управление доступом' для пользователя {tg_user_id}")
+        
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
         duration_text = format_subscription_duration(subscription_duration)
         
