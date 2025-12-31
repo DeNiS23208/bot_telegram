@@ -1909,7 +1909,7 @@ async def yookassa_webhook(request: Request):
             
             # ВАЖНО: Отправляем отдельное сообщение с обновленным меню для гарантированного обновления клавиатуры
             # Это необходимо, так как Telegram может не обновить меню автоматически
-            await asyncio.sleep(0.5)  # Небольшая задержка для гарантии, что первое сообщение обработано
+            await asyncio.sleep(1.0)  # Увеличиваем задержку для гарантии, что БД обновилась
             
             # Получаем меню еще раз для гарантии актуальности
             from db import _clear_cache
@@ -1932,12 +1932,35 @@ async def yookassa_webhook(request: Request):
                     logger.info(f"🔍 Финальная проверка БД перед обновлением меню: is_active={is_active_final}")
             
             _clear_cache()
-            updated_menu = await get_main_menu_for_user(tg_user_id)
+            
+            # ВАЖНО: Принудительно создаем правильное меню для бонусной недели
+            if is_bonus_week_active():
+                # Проверяем, есть ли активная подписка
+                has_active_final = await has_active_subscription(tg_user_id)
+                logger.info(f"🔍 Финальная проверка has_active_subscription: {has_active_final}")
+                
+                if has_active_final:
+                    # Принудительно создаем меню с "Управление доступом"
+                    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+                    BTN_MANAGE_SUB = "⚙️ Управление доступом"
+                    BTN_ABOUT_1 = "ℹ️ О проекте"
+                    updated_menu = ReplyKeyboardMarkup(
+                        keyboard=[
+                            [KeyboardButton(text=BTN_MANAGE_SUB)],
+                            [KeyboardButton(text=BTN_ABOUT_1)],
+                        ],
+                        resize_keyboard=True,
+                    )
+                    logger.info(f"✅ Принудительно создано меню с 'Управление доступом' для пользователя {tg_user_id}")
+                else:
+                    updated_menu = await get_main_menu_for_user(tg_user_id)
+            else:
+                updated_menu = await get_main_menu_for_user(tg_user_id)
+            
             updated_menu_buttons = [btn.text for row in updated_menu.keyboard for btn in row] if hasattr(updated_menu, 'keyboard') else 'N/A'
             logger.info(f"🔍 Обновленное меню для пользователя {tg_user_id}: {updated_menu_buttons}")
             
-            # Отправляем сообщение с обновленным меню для принудительного обновления клавиатуры
-            # Используем короткое сообщение, чтобы не перегружать пользователя
+            # Отправляем ПЕРВОЕ сообщение с обновленным меню
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
@@ -1946,7 +1969,17 @@ async def yookassa_webhook(request: Request):
                 reply_markup=updated_menu
             )
             
-            logger.info(f"✅ Сообщение об успешной оплате и обновленное меню отправлены пользователю {tg_user_id}")
+            # Отправляем ВТОРОЕ сообщение с обновленным меню для гарантии (Telegram иногда игнорирует первое)
+            await asyncio.sleep(0.5)
+            await safe_send_message(
+                bot=bot,
+                chat_id=tg_user_id,
+                text="📋 <b>Обновление меню</b>",
+                parse_mode="HTML",
+                reply_markup=updated_menu
+            )
+            
+            logger.info(f"✅ Сообщение об успешной оплате и обновленное меню (2 сообщения) отправлены пользователю {tg_user_id}")
         except Exception as send_error:
             logger.error(f"❌ Ошибка отправки сообщения об успешной оплате пользователю {tg_user_id}: {send_error}")
             import traceback
