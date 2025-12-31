@@ -792,8 +792,52 @@ async def check_expired_subscriptions():
                     
                     logger.info(f"⏰ Пользователь {telegram_id}: expires_at={expires_at}, now={now}, разница={(now - expires_at).total_seconds()} секунд")
                     
-                    # Если подписка уже истекла
+                    # КРИТИЧЕСКАЯ ПРОВЕРКА: Определяем, нужно ли выполнять автопродление
+                    # Автопродление нужно выполнять если:
+                    # 1. Подписка уже истекла (expires_at <= now) - для обычных подписок
+                    # 2. Бонусная неделя закончилась и это бонусная подписка - даже если подписка еще не истекла
+                    # Сначала получаем информацию о бонусной неделе
+                    from config import get_bonus_week_start, get_bonus_week_end
+                    bonus_week_start_check = get_bonus_week_start()
+                    bonus_week_end_check = get_bonus_week_end()
+                    if bonus_week_start_check.tzinfo is None:
+                        bonus_week_start_check = bonus_week_start_check.replace(tzinfo=timezone.utc)
+                    if bonus_week_end_check.tzinfo is None:
+                        bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
+                    
+                    # Определяем, является ли это бонусная подписка
+                    is_bonus_subscription_check = False
+                    if starts_at_str:
+                        try:
+                            starts_at_check = datetime.fromisoformat(starts_at_str)
+                            if starts_at_check.tzinfo is None:
+                                starts_at_check = starts_at_check.replace(tzinfo=timezone.utc)
+                            is_bonus_subscription_check = bonus_week_start_check <= starts_at_check <= bonus_week_end_check
+                        except Exception:
+                            pass
+                    if not is_bonus_subscription_check and expires_at:
+                        time_diff_check = (expires_at - bonus_week_end_check).total_seconds() / 60
+                        is_bonus_subscription_check = expires_at <= bonus_week_end_check or (0 <= time_diff_check <= 2)
+                    
+                    # Проверяем, закончилась ли бонусная неделя
+                    bonus_week_ended_check = not is_bonus_week_active()
+                    if not bonus_week_ended_check and bonus_week_end_check:
+                        time_since_bonus_end_check = (now - bonus_week_end_check).total_seconds() / 60
+                        if time_since_bonus_end_check > 0:
+                            bonus_week_ended_check = True
+                    
+                    # Определяем, нужно ли выполнять автопродление
+                    should_do_auto_renewal = False
                     if expires_at <= now:
+                        # Подписка истекла - нужно автопродление
+                        should_do_auto_renewal = True
+                        logger.info(f"🔍 Подписка пользователя {telegram_id} истекла (expires_at={expires_at}, now={now}) - нужно автопродление")
+                    elif bonus_week_ended_check and is_bonus_subscription_check:
+                        # Бонусная неделя закончилась и это бонусная подписка - нужно автопродление даже если подписка еще не истекла
+                        should_do_auto_renewal = True
+                        logger.info(f"🔍 Бонусная неделя закончилась для пользователя {telegram_id}, подписка еще активна (expires_at={expires_at}, now={now}) - нужно автопродление")
+                    
+                    if should_do_auto_renewal:
                         auto_payment_failed = False
                         auto_payment_succeeded = False  # Флаг успешного автопродления
                         
