@@ -845,18 +845,32 @@ async def check_expired_subscriptions():
                                 
                                 # Если платеж успешен (сразу или после ожидания)
                                 if payment_status == "succeeded" and not auto_payment_failed:
-                                    # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД
+                                    # ВАЖНО: Проверяем, что платеж действительно существует в БД и имеет статус "succeeded"
+                                    # Это предотвращает отправку уведомлений о несуществующих платежах
+                                    async with aiosqlite.connect(DB_PATH) as db_check_payment:
+                                        cursor_payment = await db_check_payment.execute(
+                                            "SELECT payment_id, status FROM payments WHERE payment_id = ?",
+                                            (payment_id,)
+                                        )
+                                        row_payment = await cursor_payment.fetchone()
+                                        
+                                        if not row_payment or row_payment[1] != "succeeded":
+                                            logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: платеж {payment_id} не найден в БД или не имеет статус 'succeeded'")
+                                            auto_payment_failed = True
+                                            continue
+                                    
+                                    # ВАЖНО: Проверяем, что у пользователя есть хотя бы один успешный платеж в БД (кроме текущего автоплатежа)
                                     # Это гарантирует, что мы не отправляем уведомление пользователям, которые никогда не платили
                                     async with aiosqlite.connect(DB_PATH) as db_check:
                                         cursor = await db_check.execute(
-                                            "SELECT COUNT(*) FROM payments WHERE telegram_id = ? AND status = 'succeeded'",
-                                            (telegram_id,)
+                                            "SELECT COUNT(*) FROM payments WHERE telegram_id = ? AND status = 'succeeded' AND payment_id != ?",
+                                            (telegram_id, payment_id)
                                         )
                                         row = await cursor.fetchone()
-                                        has_successful_payment = row and row[0] and row[0] > 0
+                                        has_previous_successful_payment = row and row[0] and row[0] > 0
                                     
-                                    if not has_successful_payment:
-                                        logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: нет успешных платежей в БД (возможно, тестовый платеж или ошибка)")
+                                    if not has_previous_successful_payment:
+                                        logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: нет предыдущих успешных платежей в БД (пользователь никогда не платил)")
                                         auto_payment_failed = True
                                         continue
                                     
