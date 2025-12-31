@@ -1737,8 +1737,18 @@ async def yookassa_webhook(request: Request):
             from db import is_auto_renewal_enabled
             auto_renewal_still_enabled = await is_auto_renewal_enabled(tg_user_id)
             
-            notification_key = f"pm_saved_{payment_id}"
-            if not await already_processed(notification_key) and auto_renewal_still_enabled:
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: Используем комбинацию payment_id и tg_user_id для уникальности
+            # Это предотвращает дублирование даже если webhook обрабатывается дважды
+            notification_key = f"pm_saved_{payment_id}_{tg_user_id}"
+            
+            # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Проверяем, не отправляли ли мы уже уведомление для этого платежа
+            # Используем также простой ключ по payment_id для дополнительной защиты
+            notification_key_simple = f"pm_saved_{payment_id}"
+            
+            # Проверяем оба ключа
+            already_sent = await already_processed(notification_key) or await already_processed(notification_key_simple)
+            
+            if not already_sent and auto_renewal_still_enabled:
                 await safe_send_message(
                     bot=bot,
                     chat_id=tg_user_id,
@@ -1750,10 +1760,11 @@ async def yookassa_webhook(request: Request):
                         "⚙️ Вы можете отключить автопродление в меню «Управление доступом».",
                     parse_mode="HTML"
                 )
-                # Помечаем, что уведомление отправлено
+                # Помечаем, что уведомление отправлено (ОБА ключа для надежности)
                 await mark_processed(notification_key)
+                await mark_processed(notification_key_simple)
                 logger.info(f"✅ Отправлено уведомление о сохранении способа оплаты для пользователя {tg_user_id}, payment_id: {payment_id}")
-            elif await already_processed(notification_key):
+            elif already_sent:
                 logger.info(f"⏭️ Уведомление о сохранении способа оплаты уже было отправлено для платежа {payment_id}, пропускаем")
             elif not auto_renewal_still_enabled:
                 logger.info(f"⏭️ Автопродление отключено пользователем {tg_user_id} - не отправляем уведомление о сохранении способа оплаты")
