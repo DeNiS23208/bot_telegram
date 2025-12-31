@@ -1032,7 +1032,33 @@ async def check_expired_subscriptions():
                                     # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, не отправляли ли мы уже уведомление об этом автопродлении
                                     # Используем уникальный ключ для каждого автопродления
                                     auto_renewal_notification_key = f"auto_renewal_notification_{payment_id}_{telegram_id}"
-                                    if await already_processed(auto_renewal_notification_key):
+                                    
+                                    # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаемся, что платеж действительно был создан в рамках автопродления
+                                    # Проверяем, что платеж был создан недавно (в течение последних 5 минут)
+                                    # Это гарантирует, что мы не обрабатываем старые платежи
+                                    payment_created_recently = False
+                                    try:
+                                        async with aiosqlite.connect(DB_PATH) as db_check_time:
+                                            cursor_time = await db_check_time.execute(
+                                                "SELECT created_at FROM payments WHERE payment_id = ?",
+                                                (payment_id,)
+                                            )
+                                            row_time = await cursor_time.fetchone()
+                                            if row_time and row_time[0]:
+                                                payment_created_at = datetime.fromisoformat(row_time[0])
+                                                if payment_created_at.tzinfo is None:
+                                                    payment_created_at = payment_created_at.replace(tzinfo=timezone.utc)
+                                                time_since_creation = (datetime.now(timezone.utc) - payment_created_at).total_seconds() / 60
+                                                if time_since_creation <= 5:  # Платеж создан не более 5 минут назад
+                                                    payment_created_recently = True
+                                    except Exception as time_check_error:
+                                        logger.warning(f"⚠️ Ошибка проверки времени создания платежа {payment_id}: {time_check_error}")
+                                        # Если не удалось проверить время, считаем что платеж новый
+                                        payment_created_recently = True
+                                    
+                                    if not payment_created_recently:
+                                        logger.warning(f"⚠️ Пропуск отправки уведомления об автопродлении: платеж {payment_id} был создан более 5 минут назад (возможно, это старый платеж)")
+                                    elif await already_processed(auto_renewal_notification_key):
                                         logger.warning(f"⚠️ Уведомление об автопродлении для платежа {payment_id} уже было отправлено пользователю {telegram_id} - пропускаем")
                                     else:
                                         # Отправляем уведомление об успешном автопродлении
