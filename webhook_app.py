@@ -1212,11 +1212,11 @@ async def check_expired_subscriptions():
                                     # Особенно важно, если бонусная неделя закончилась и перешли в продакшн режим
                                     menu = await get_main_menu_for_user(telegram_id)
                                     await safe_send_message(
-                                            bot=bot,
-                                            chat_id=telegram_id,
-                                            text="📱 Меню обновлено",
-                                            reply_markup=menu
-                                        )
+                                        bot=bot,
+                                        chat_id=telegram_id,
+                                        text="📱 Меню обновлено",
+                                        reply_markup=menu
+                                    )
                                         logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}, меню обновлено")
                                 else:
                                     # Платеж не прошел - ОТКЛЮЧАЕМ автопродление автоматически
