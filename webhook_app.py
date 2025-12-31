@@ -1787,7 +1787,7 @@ async def yookassa_webhook(request: Request):
         bonus_end = get_bonus_week_end()
         # Убеждаемся, что bonus_end имеет timezone
         if bonus_end.tzinfo is None:
-            bonus_end = bonus_end.replace(tzinfo=timezone.utc)
+            bonus_end = bonus_end.replace(tzinfo=tz.utc)
         remaining_time = bonus_end - now
         if remaining_time.total_seconds() <= 0:
             # Бонусная неделя уже закончилась - используем продакшн
