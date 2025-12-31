@@ -292,8 +292,9 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     # Если активна бонусная неделя, показываем специальное меню
     if is_bonus_week_active():
         # Проверяем, есть ли активная подписка (даже в бонусной неделе)
-        from db import has_active_subscription
+        # Используем функцию из webhook_app.py, а не из db.py
         has_active = await has_active_subscription(telegram_id)
+        logger.info(f"🔍 get_main_menu_for_user: telegram_id={telegram_id}, is_bonus_week_active={is_bonus_week_active()}, has_active={has_active}")
         
         if has_active:
             # Если есть активная подписка, показываем "Управление доступом"
