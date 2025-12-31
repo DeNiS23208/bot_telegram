@@ -807,10 +807,42 @@ async def bonus_week_pay_callback(callback: CallbackQuery):
 async def back_to_bonus_menu_callback(callback: CallbackQuery):
     """Обработчик кнопки 'Назад в меню' в бонусной неделе"""
     await callback.answer()
-    await callback.message.answer(
-        "Вы вернулись в главное меню",
-        reply_markup=await bonus_week_menu()
-    )
+    user_id = callback.from_user.id
+    if is_bonus_week_active():
+        # В бонусной неделе проверяем, есть ли активная подписка
+        from db import get_subscription_expires_at
+        from datetime import timezone
+        expires_at = await get_subscription_expires_at(user_id)
+        now = datetime.now(timezone.utc)
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        has_active = expires_at and expires_at > now
+        
+        if has_active:
+            # Если есть активная подписка, показываем меню с "Управление доступом"
+            BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+            keyboard = [
+                [KeyboardButton(text=BTN_MANAGE_SUB)],
+                [KeyboardButton(text=BTN_ABOUT_1)],
+            ]
+            menu = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+            await callback.message.answer(
+                "Вы вернулись в главное меню",
+                reply_markup=menu
+            )
+        else:
+            # Если нет активной подписки, показываем бонусное меню
+            await callback.message.answer(
+                "Вы вернулись в главное меню",
+                reply_markup=await bonus_week_menu()
+            )
+    else:
+        await callback.message.answer(
+            "Вы вернулись в главное меню",
+            reply_markup=await main_menu(user_id)
+        )
 
 
 async def bonus_week_pay(message: Message, is_callback: bool = False):
