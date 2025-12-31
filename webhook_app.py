@@ -2468,7 +2468,20 @@ async def yookassa_webhook(request: Request):
         logger.info(f"🔍 ФИНАЛЬНОЕ меню для пользователя {tg_user_id} (тип платежа: {payment_type_name}): {menu_buttons}")
         
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
-        duration_text = format_subscription_duration(subscription_duration)
+        # КРИТИЧЕСКИ ВАЖНО: Для бонусной недели вычисляем длительность в минутах
+        if is_bonus_week_active() and starts_at_dt and expires_at_dt:
+            # Вычисляем разницу в минутах для бонусной недели
+            time_diff = expires_at_dt - starts_at_dt
+            minutes_diff = int(time_diff.total_seconds() / 60)
+            if minutes_diff == 1:
+                duration_text = "1 минута"
+            elif 2 <= minutes_diff <= 4:
+                duration_text = f"{minutes_diff} минуты"
+            else:
+                duration_text = f"{minutes_diff} минут"
+        else:
+            # Для продакшн режима используем обычное форматирование
+            duration_text = format_subscription_duration(subscription_duration)
         
         # Формируем текст в зависимости от режима (бонусная неделя или продакшн)
         if is_bonus_week_active():
@@ -2621,7 +2634,20 @@ async def yookassa_webhook(request: Request):
         menu = await get_main_menu_for_user(tg_user_id)
         
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
-        duration_text = format_subscription_duration(subscription_duration)
+        # КРИТИЧЕСКИ ВАЖНО: Для бонусной недели вычисляем длительность в минутах
+        if is_bonus_week_active() and starts_at_dt and expires_at_dt:
+            # Вычисляем разницу в минутах для бонусной недели
+            time_diff = expires_at_dt - starts_at_dt
+            minutes_diff = int(time_diff.total_seconds() / 60)
+            if minutes_diff == 1:
+                duration_text = "1 минута"
+            elif 2 <= minutes_diff <= 4:
+                duration_text = f"{minutes_diff} минуты"
+            else:
+                duration_text = f"{minutes_diff} минут"
+        else:
+            # Для продакшн режима используем обычное форматирование
+            duration_text = format_subscription_duration(subscription_duration)
         
         # Формируем текст в зависимости от режима (бонусная неделя или продакшн)
         if is_bonus_week_active():
