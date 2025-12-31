@@ -2214,14 +2214,6 @@ async def yookassa_webhook(request: Request):
             logger.info(f"✅ payment_method_saved=True - автопродление будет включено")
     
     if should_enable_auto_renewal:
-            from db import save_payment_method, set_auto_renewal
-            await save_payment_method(tg_user_id, payment_method_id)
-            logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
-            
-            # Включаем автопродление
-            await set_auto_renewal(tg_user_id, True)
-            logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
-            
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
             payment_method_name = "карта"  # По умолчанию
             if payment_method_type:
@@ -2285,10 +2277,8 @@ async def yookassa_webhook(request: Request):
     else:
         if not payment_method_id:
             logger.info(f"ℹ️ Платеж {payment_id}: payment_method_id отсутствует - автопродление НЕ будет включено")
-        elif not payment_method_saved:
-            logger.info(f"ℹ️ Платеж {payment_id}: payment_method не сохранен пользователем (saved=False) - автопродление НЕ будет включено")
-        elif payment_method_type and payment_method_type.lower() not in ['bank_card', 'card', 'sbp', 'sberbank', 'sberpay']:
-            logger.info(f"ℹ️ Платеж {payment_id}: тип платежного метода {payment_method_type} не поддерживает автопродление")
+        elif payment_method_type and payment_method_type.lower() not in supported_types:
+            logger.info(f"ℹ️ Платеж {payment_id}: тип платежного метода {payment_method_type} не поддерживает автопродление (поддерживаются: {', '.join(supported_types)})")
     
     # Обновляем статус платежа в БД
     await update_payment_status_async(payment_id, "succeeded")
@@ -2351,31 +2341,86 @@ async def yookassa_webhook(request: Request):
                     invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
                 else:
-                    raise Exception("У канала нет основной ссылки")
+                    # Если основной ссылки нет, создаем новую основную ссылку
+                    logger.warning(f"⚠️ У канала нет основной ссылки, создаем новую")
+                    try:
+                        chat_invite = await bot.create_chat_invite_link(
+                            chat_id=CHANNEL_ID,
+                            creates_join_request=False
+                        )
+                        invite_link = chat_invite.invite_link
+                        logger.info(f"✅ Создана новая основная ссылка канала для пользователя {tg_user_id}")
+                    except Exception as create_error:
+                        logger.error(f"❌ Не удалось создать основную ссылку: {create_error}")
+                        # Последняя попытка - создаем ссылку без ограничений
+                        try:
+                            chat_invite = await bot.create_chat_invite_link(
+                                chat_id=CHANNEL_ID,
+                                creates_join_request=True,
+                                expire_date=link_expire_date
+                            )
+                            invite_link = chat_invite.invite_link
+                            logger.info(f"✅ Создана ссылка с заявкой (последняя попытка) для пользователя {tg_user_id}")
+                        except Exception as final_error:
+                            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Все попытки создания ссылки не удались: {final_error}")
+                            # В крайнем случае используем username канала
+                            try:
+                                chat_info = await bot.get_chat(CHANNEL_ID)
+                                if hasattr(chat_info, 'username') and chat_info.username:
+                                    invite_link = f"https://t.me/{chat_info.username}"
+                                    logger.info(f"✅ Используется публичная ссылка канала @{chat_info.username} для пользователя {tg_user_id}")
+                                else:
+                                    raise Exception("Не удалось получить ссылку на канал")
+                            except Exception as username_error:
+                                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить ссылку на канал: {username_error}")
+                                raise Exception("Не удалось создать или получить ссылку на канал после всех попыток")
             except Exception as e3:
-                logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                raise e3
+                logger.error(f"❌ Ошибка при попытке получить основную ссылку: {e3}")
+                # Пробуем еще раз создать ссылку без ограничений
+                try:
+                    chat_invite = await bot.create_chat_invite_link(
+                        chat_id=CHANNEL_ID,
+                        creates_join_request=False
+                    )
+                    invite_link = chat_invite.invite_link
+                    logger.info(f"✅ Создана ссылка без ограничений (fallback) для пользователя {tg_user_id}")
+                except Exception as final_fallback_error:
+                    logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Все попытки создания ссылки не удались: {final_fallback_error}")
+                    raise Exception("Не удалось создать ссылку на канал после всех попыток")
         
-        if invite_link:
-            logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
+        # КРИТИЧЕСКИ ВАЖНО: Ссылка должна быть создана ВСЕГДА
+        if not invite_link:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ссылка на канал не была создана для пользователя {tg_user_id} после всех попыток!")
+            raise Exception("Не удалось создать ссылку на канал")
+        
+        logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
     except Exception as e:
-        logger.error(f"❌ Ошибка создания пригласительной ссылки: {e}")
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА создания пригласительной ссылки: {e}")
         import traceback
         traceback.print_exc()
-        # Отправляем сообщение об ошибке
-        # ВАЖНО: Принудительно обновляем меню после оплаты, чтобы показать правильные кнопки
-        menu = await get_main_menu_for_user(tg_user_id)
-        
-        await safe_send_message(
-            bot=bot,
-            chat_id=tg_user_id,
-            text="✅ <b>Оплата подтверждена!</b>\n\n"
-            "Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором.",
-            parse_mode="HTML",
-            reply_markup=menu
-        )
-        await mark_processed(payment_id)
-        return {"ok": True, "error": "failed to create invite link"}
+        # КРИТИЧЕСКИ ВАЖНО: Пробуем еще раз создать ссылку перед возвратом ошибки
+        try:
+            logger.warning(f"⚠️ Последняя попытка создания ссылки для пользователя {tg_user_id}")
+            chat_invite = await bot.create_chat_invite_link(
+                chat_id=CHANNEL_ID,
+                creates_join_request=False
+            )
+            invite_link = chat_invite.invite_link
+            logger.info(f"✅ Ссылка создана в последней попытке для пользователя {tg_user_id}")
+        except Exception as final_error:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать ссылку даже в последней попытке: {final_error}")
+            # Отправляем сообщение об ошибке, но НЕ прерываем обработку платежа
+            menu = await get_main_menu_for_user(tg_user_id)
+            await safe_send_message(
+                bot=bot,
+                chat_id=tg_user_id,
+                text="✅ <b>Оплата подтверждена!</b>\n\n"
+                "⚠️ Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором для получения доступа.",
+                parse_mode="HTML",
+                reply_markup=menu
+            )
+            # НЕ возвращаем ошибку - продолжаем обработку платежа
+            invite_link = None  # Устанавливаем в None, чтобы дальше обработать это
 
     # Получаем даты начала и окончания подписки (уже сохранены выше)
     from db import get_subscription_expires_at, get_subscription_starts_at
