@@ -718,14 +718,76 @@ async def bonus_week_info(message: Message):
         "Нажмите кнопку ниже, чтобы получить доступ за 1 рубль 👇"
     )
     
-    # Создаем кнопки: оплата и назад в меню
-    pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", callback_data="bonus_week_pay")
+    # Сразу создаем платеж и показываем ссылку на оплату
+    # Проверяем активный pending платеж
+    active_payment = await get_active_pending_payment(message.from_user.id, minutes=PAYMENT_LINK_VALID_MINUTES)
+    
+    pay_url = None
+    payment_id = None
+    
+    if active_payment:
+        # Используем существующий платеж
+        payment_id, created_at = active_payment
+        pay_url = await maybe_await(get_payment_url, payment_id)
+    else:
+        # Создаем новый платеж для бонусной недели
+        return_url_with_user = get_return_url(message.from_user.id)
+        bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
+        
+        payment_id, pay_url = await maybe_await(
+            create_payment,
+            amount_rub=BONUS_WEEK_PRICE_RUB,
+            description=f"Бонусная неделя: Доступ к каналу ({format_subscription_duration(bonus_duration_days)})",
+            return_url=return_url_with_user,
+            customer_email=CUSTOMER_EMAIL,
+            telegram_user_id=message.from_user.id,
+            enable_save_payment_method=True,
+        )
+        
+        await save_payment(message.from_user.id, payment_id, status="pending")
+    
+    # Если URL не получен, отправляем сообщение об ошибке
+    if not pay_url:
+        await message.answer(
+            "❌ <b>Ошибка создания платежа</b>\n\n"
+            "Не удалось создать ссылку на оплату. Пожалуйста, попробуйте позже.",
+            parse_mode="HTML",
+            reply_markup=await bonus_week_menu()
+        )
+        return
+    
+    # Формируем текст с предупреждением о бонусной неделе
+    bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
+    bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+    
+    # Создаем кнопку с прямой ссылкой на оплату (URL, а не callback)
+    pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", url=pay_url)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
     
+    subscription_text = (
+        "🎉 <b>БОНУСНАЯ НЕДЕЛЯ: Оформление доступа</b>\n\n"
+        f"💎 <b>Стоимость:</b> {format_subscription_duration(bonus_duration_days)} — 1 рубль\n\n"
+        f"⏰ <b>Срок доступа:</b> {bonus_duration_text}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "⚠️ <b>ВАЖНО:</b> После окончания бонусной недели:\n"
+        "• Ваш доступ в канал закончится\n"
+        "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+        "• Автопродление можно отключить в меню «Управление доступом»\n\n"
+        "💳 <b>Сохранение карты:</b>\n"
+        "На форме оплаты вам будет предложено сохранить данные карты для автопродления.\n"
+        "Вы можете выбрать, сохранять карту или нет.\n\n"
+        "📋 Нажимая кнопку оплаты, вы соглашаетесь с:\n"
+        "• Обработкой <a href=\"https://disk.yandex.ru/i/QadGJAMYKqbKpQ\">персональных данных</a>\n"
+        "• Условиями <a href=\"https://disk.yandex.ru/i/fXUDJfj_i5cYIA\">публичной оферты</a>\n"
+        "• Регулярными списаниями при включенном автопродлении\n\n"
+        "🎁 После оплаты вы получите доступ к закрытому каналу"
+    )
+    
     await message.answer(
-        bonus_text,
+        subscription_text,
         parse_mode="HTML",
-        reply_markup=keyboard
+        reply_markup=keyboard,
+        disable_web_page_preview=True
     )
 
 
