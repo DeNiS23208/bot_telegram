@@ -778,9 +778,8 @@ async def check_expired_subscriptions():
                     cursor_bonus = await db_bonus.execute(
                         """
                         SELECT s.telegram_id, s.expires_at, s.auto_renewal_enabled, 
-                               pm.payment_method_id, s.starts_at
+                               s.saved_payment_method_id, s.starts_at
                         FROM subscriptions s
-                        LEFT JOIN payment_methods pm ON s.telegram_id = pm.telegram_id
                         WHERE s.expires_at > ? AND s.starts_at IS NOT NULL
                         """,
                         (datetime.now(timezone.utc).isoformat(),)
