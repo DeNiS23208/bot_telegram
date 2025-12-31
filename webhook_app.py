@@ -738,7 +738,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                        continue
+                    continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
@@ -1551,6 +1551,10 @@ async def yookassa_webhook(request: Request):
     await activate_subscription(tg_user_id, days=subscription_duration)
     logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(subscription_duration)} (тип платежа: {payment_method_type or 'неизвестен/отсутствует'})")
     
+    # Очищаем кэш подписки сразу после активации, чтобы has_active_subscription увидела новую подписку
+    from db import _clear_cache
+    _clear_cache()
+    
     # Сохраняем payment_method_id и автоматически включаем автопродление
     # ВАЖНО: Автопродление включаем если:
     # 1. payment_method_id есть
@@ -1566,12 +1570,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (поддерживаются: {', '.join(supported_types)})")
             payment_method_id = None  # Не сохраняем для неподдерживаемых типов
         else:
-            from db import save_payment_method, set_auto_renewal
-            await save_payment_method(tg_user_id, payment_method_id)
+        from db import save_payment_method, set_auto_renewal
+        await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-            await set_auto_renewal(tg_user_id, True)
+        await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
             
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
@@ -1592,7 +1596,7 @@ async def yookassa_webhook(request: Request):
                     f"• Доступ будет автоматически продлеваться каждые <b>30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
-            else:
+    else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                 )
@@ -1669,18 +1673,18 @@ async def yookassa_webhook(request: Request):
                 )
         
         if not invite_link:
-            # Если и это не получилось, пробуем основную ссылку канала
+                # Если и это не получилось, пробуем основную ссылку канала
             logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
-            try:
-                chat = await bot.get_chat(CHANNEL_ID)
-                if chat.invite_link:
-                    invite_link = chat.invite_link
+                try:
+                    chat = await bot.get_chat(CHANNEL_ID)
+                    if chat.invite_link:
+                        invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                else:
-                    raise Exception("У канала нет основной ссылки")
-            except Exception as e3:
+                    else:
+                        raise Exception("У канала нет основной ссылки")
+                except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                raise e3
+                    raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
@@ -1726,7 +1730,11 @@ async def yookassa_webhook(request: Request):
 
         # Получаем меню с обновленными кнопками (теперь должна быть "Управление доступом")
         # ВАЖНО: Принудительно обновляем меню после оплаты, чтобы показать правильные кнопки
+        # Очищаем кэш еще раз перед получением меню, чтобы гарантировать актуальные данные
+        from db import _clear_cache
+        _clear_cache()
         menu = await get_main_menu_for_user(tg_user_id)
+        logger.info(f"🔍 Меню для пользователя {tg_user_id} после оплаты: {menu.keyboard if hasattr(menu, 'keyboard') else 'N/A'}")
         
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
         duration_text = format_subscription_duration(subscription_duration)
