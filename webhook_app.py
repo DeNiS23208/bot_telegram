@@ -365,7 +365,7 @@ async def activate_subscription(telegram_id: int, days: int = 30) -> tuple[datet
         # гарантируем, что юзер существует
         await db_conn.execute(
             "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
-            (telegram_id, None, datetime.utcnow().isoformat())
+            (telegram_id, None, datetime.now(timezone.utc).isoformat())
         )
         
         # upsert подписки (сохраняем дату начала и окончания)
@@ -380,6 +380,7 @@ async def activate_subscription(telegram_id: int, days: int = 30) -> tuple[datet
             (telegram_id, expires_at.isoformat(), starts_at.isoformat())
         )
         await db_conn.commit()
+        logger.info(f"💾 Подписка сохранена в БД: telegram_id={telegram_id}, expires_at={expires_at.isoformat()}, starts_at={starts_at.isoformat()}")
     
     return starts_at, expires_at
 
