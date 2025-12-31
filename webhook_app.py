@@ -2097,7 +2097,8 @@ async def yookassa_webhook(request: Request):
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
                 else:
                     raise Exception("У канала нет основной ссылки")
-                except Exception as e3:
+            except Exception as e3:
+                logger.error(f"❌ Ошибка получения основной ссылки канала: {e3}")
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
                     raise e3
         
