@@ -2311,111 +2311,99 @@ async def yookassa_webhook(request: Request):
             else:
                 link_expire_date = datetime.utcnow() + timedelta(days=SUBSCRIPTION_DAYS)
         
+        # КРИТИЧЕСКИ ВАЖНО: Ссылка должна быть УНИКАЛЬНОЙ для каждого пользователя
+        # Срок действия ссылки = срок доступа пользователя (expires_at подписки)
+        # Другой пользователь НЕ может использовать чужую ссылку
+        # 
         # Создаем ссылку С заявкой на вступление для проверки владельца
         # ВАЖНО: member_limit нельзя использовать с creates_join_request=True
         # Защита от использования другими будет через проверку в обработчике заявок
         invite_link = await safe_create_invite_link(
             bot=bot,
-                chat_id=CHANNEL_ID,
+            chat_id=CHANNEL_ID,
             creates_join_request=True,  # С заявкой - для проверки владельца
-            expire_date=link_expire_date  # Ссылка действительна до окончания подписки
+            expire_date=link_expire_date  # Ссылка действительна до окончания подписки пользователя
         )
         
         if not invite_link:
-            # Если не получилось с заявкой, пробуем без заявки (fallback)
-            logger.warning(f"⚠️ Первая попытка создания ссылки не удалась, пробуем второй вариант")
+            # Если не получилось с заявкой, пробуем без заявки с member_limit=1 (одноразовая ссылка)
+            logger.warning(f"⚠️ Первая попытка создания ссылки не удалась, пробуем второй вариант (одноразовая ссылка)")
             invite_link = await safe_create_invite_link(
                 bot=bot,
-                    chat_id=CHANNEL_ID,
+                chat_id=CHANNEL_ID,
                 creates_join_request=False,
-                member_limit=1,  # Одноразовая ссылка (без заявки)
-                expire_date=link_expire_date
-                )
+                member_limit=1,  # Одноразовая ссылка - только один пользователь может использовать
+                expire_date=link_expire_date  # Ссылка действительна до окончания подписки пользователя
+            )
         
         if not invite_link:
-            # Если и это не получилось, пробуем основную ссылку канала
-            logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
+            # Если и это не получилось, пробуем еще раз с заявкой (последняя попытка)
+            logger.warning(f"⚠️ Вторая попытка не удалась, пробуем еще раз с заявкой")
             try:
-                chat = await bot.get_chat(CHANNEL_ID)
-                if chat.invite_link:
-                    invite_link = chat.invite_link
-                    logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                else:
-                    # Если основной ссылки нет, создаем новую основную ссылку
-                    logger.warning(f"⚠️ У канала нет основной ссылки, создаем новую")
-                    try:
-                        chat_invite = await bot.create_chat_invite_link(
-                            chat_id=CHANNEL_ID,
-                            creates_join_request=False
-                        )
-                        invite_link = chat_invite.invite_link
-                        logger.info(f"✅ Создана новая основная ссылка канала для пользователя {tg_user_id}")
-                    except Exception as create_error:
-                        logger.error(f"❌ Не удалось создать основную ссылку: {create_error}")
-                        # Последняя попытка - создаем ссылку без ограничений
-                        try:
-                            chat_invite = await bot.create_chat_invite_link(
-                                chat_id=CHANNEL_ID,
-                                creates_join_request=True,
-                                expire_date=link_expire_date
-                            )
-                            invite_link = chat_invite.invite_link
-                            logger.info(f"✅ Создана ссылка с заявкой (последняя попытка) для пользователя {tg_user_id}")
-                        except Exception as final_error:
-                            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Все попытки создания ссылки не удались: {final_error}")
-                            # В крайнем случае используем username канала
-                            try:
-                                chat_info = await bot.get_chat(CHANNEL_ID)
-                                if hasattr(chat_info, 'username') and chat_info.username:
-                                    invite_link = f"https://t.me/{chat_info.username}"
-                                    logger.info(f"✅ Используется публичная ссылка канала @{chat_info.username} для пользователя {tg_user_id}")
-                                else:
-                                    raise Exception("Не удалось получить ссылку на канал")
-                            except Exception as username_error:
-                                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить ссылку на канал: {username_error}")
-                                raise Exception("Не удалось создать или получить ссылку на канал после всех попыток")
-            except Exception as e3:
-                logger.error(f"❌ Ошибка при попытке получить основную ссылку: {e3}")
-                # Пробуем еще раз создать ссылку без ограничений
+                chat_invite = await bot.create_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    creates_join_request=True,
+                    expire_date=link_expire_date
+                )
+                invite_link = chat_invite.invite_link
+                logger.info(f"✅ Создана ссылка с заявкой (последняя попытка) для пользователя {tg_user_id}")
+            except Exception as final_error:
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать ссылку с заявкой: {final_error}")
+                # Пробуем еще раз с member_limit=1
                 try:
                     chat_invite = await bot.create_chat_invite_link(
                         chat_id=CHANNEL_ID,
-                        creates_join_request=False
+                        creates_join_request=False,
+                        member_limit=1,
+                        expire_date=link_expire_date
                     )
                     invite_link = chat_invite.invite_link
-                    logger.info(f"✅ Создана ссылка без ограничений (fallback) для пользователя {tg_user_id}")
+                    logger.info(f"✅ Создана одноразовая ссылка (последняя попытка) для пользователя {tg_user_id}")
                 except Exception as final_fallback_error:
-                    logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Все попытки создания ссылки не удались: {final_fallback_error}")
-                    raise Exception("Не удалось создать ссылку на канал после всех попыток")
+                    logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Все попытки создания уникальной ссылки не удались: {final_fallback_error}")
+                    raise Exception(f"Не удалось создать уникальную ссылку на канал для пользователя {tg_user_id} после всех попыток")
         
-        # КРИТИЧЕСКИ ВАЖНО: Ссылка должна быть создана ВСЕГДА
+        # КРИТИЧЕСКИ ВАЖНО: Ссылка должна быть создана ВСЕГДА и быть УНИКАЛЬНОЙ для пользователя
         if not invite_link:
-            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Ссылка на канал не была создана для пользователя {tg_user_id} после всех попыток!")
-            raise Exception("Не удалось создать ссылку на канал")
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Уникальная ссылка на канал не была создана для пользователя {tg_user_id} после всех попыток!")
+            raise Exception(f"Не удалось создать уникальную ссылку на канал для пользователя {tg_user_id}")
         
-        logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
+        logger.info(f"✅ Создана УНИКАЛЬНАЯ индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date} (срок доступа пользователя)")
     except Exception as e:
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА создания пригласительной ссылки: {e}")
         import traceback
         traceback.print_exc()
-        # КРИТИЧЕСКИ ВАЖНО: Пробуем еще раз создать ссылку перед возвратом ошибки
+        # КРИТИЧЕСКИ ВАЖНО: Пробуем еще раз создать УНИКАЛЬНУЮ ссылку перед возвратом ошибки
         try:
-            logger.warning(f"⚠️ Последняя попытка создания ссылки для пользователя {tg_user_id}")
-            chat_invite = await bot.create_chat_invite_link(
-                chat_id=CHANNEL_ID,
-                creates_join_request=False
-            )
-            invite_link = chat_invite.invite_link
-            logger.info(f"✅ Ссылка создана в последней попытке для пользователя {tg_user_id}")
+            logger.warning(f"⚠️ Последняя попытка создания уникальной ссылки для пользователя {tg_user_id}")
+            # Пробуем с заявкой
+            try:
+                chat_invite = await bot.create_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    creates_join_request=True,
+                    expire_date=link_expire_date
+                )
+                invite_link = chat_invite.invite_link
+                logger.info(f"✅ Уникальная ссылка создана в последней попытке (с заявкой) для пользователя {tg_user_id}")
+            except Exception:
+                # Если не получилось с заявкой, пробуем с member_limit=1
+                chat_invite = await bot.create_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    creates_join_request=False,
+                    member_limit=1,  # Одноразовая ссылка - уникальна для пользователя
+                    expire_date=link_expire_date
+                )
+                invite_link = chat_invite.invite_link
+                logger.info(f"✅ Уникальная ссылка создана в последней попытке (одноразовая) для пользователя {tg_user_id}")
         except Exception as final_error:
-            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать ссылку даже в последней попытке: {final_error}")
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать уникальную ссылку даже в последней попытке: {final_error}")
             # Отправляем сообщение об ошибке, но НЕ прерываем обработку платежа
             menu = await get_main_menu_for_user(tg_user_id)
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
                 text="✅ <b>Оплата подтверждена!</b>\n\n"
-                "⚠️ Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором для получения доступа.",
+                "⚠️ Произошла ошибка при создании уникальной ссылки. Пожалуйста, свяжитесь с администратором для получения доступа.",
                 parse_mode="HTML",
                 reply_markup=menu
             )
