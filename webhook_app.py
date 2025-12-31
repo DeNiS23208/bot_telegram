@@ -751,7 +751,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                        continue
+                    continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
@@ -796,8 +796,8 @@ async def check_expired_subscriptions():
                                 from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
-                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                                
+                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                        
                                 # Определяем цену и длительность для автопродления
                                 # ВАЖНО: Если бонусная неделя закончилась И это была подписка из бонусной недели, используем продакшн цены
                                 if bonus_week_ended and is_bonus_subscription:
@@ -820,12 +820,12 @@ async def check_expired_subscriptions():
                                 payment_id, payment_status = create_auto_payment(
                                     amount_rub=auto_amount,
                                     description=f"Автопродление доступа на канал ({format_subscription_duration(auto_duration)})",
-                                    customer_email=CUSTOMER_EMAIL,
-                                    telegram_user_id=telegram_id,
+                            customer_email=CUSTOMER_EMAIL,
+                            telegram_user_id=telegram_id,
                                     payment_method_id=saved_payment_method_id,
-                                )
-                                
-                                # Сохраняем платеж
+                        )
+                        
+                        # Сохраняем платеж
                                 await save_payment(telegram_id, payment_id, status=payment_status)
                                 
                                 # Если платеж сразу не succeeded, ждем webhook или проверяем статус
@@ -1156,6 +1156,32 @@ async def yookassa_webhook(request: Request):
                             logger.warning(f"⚠️ Ошибка проверки времени создания платежа: {e}")
                 except Exception as e:
                     logger.warning(f"⚠️ Ошибка получения времени создания платежа: {e}")
+                
+                # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, был ли платеж уже успешно обработан
+                # Если платеж уже успешен, не отправляем сообщение об отмене
+                payment_already_succeeded = await already_processed(payment_id)
+                
+                # Также проверяем статус платежа в БД
+                async with aiosqlite.connect(DB_PATH) as db_check:
+                    cursor = await db_check.execute(
+                        "SELECT status FROM payments WHERE payment_id = ?",
+                        (payment_id,)
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0] == "succeeded":
+                        payment_already_succeeded = True
+                        logger.info(f"⚠️ Платеж {payment_id} уже имеет статус 'succeeded' в БД - игнорируем событие canceled")
+                
+                # Также проверяем, есть ли у пользователя активная подписка (возможно, платеж уже обработан)
+                from db import has_active_subscription
+                has_active = await has_active_subscription(tg_user_id)
+                if has_active:
+                    logger.info(f"⚠️ У пользователя {tg_user_id} уже есть активная подписка - игнорируем событие canceled для платежа {payment_id}")
+                    payment_already_succeeded = True
+                
+                if payment_already_succeeded:
+                    logger.info(f"ℹ️ Платеж {payment_id} уже был успешно обработан - не отправляем сообщение об отмене")
+                    return {"ok": True, "event": "payment.canceled", "ignored": "already_succeeded"}
                 
                 # Обновляем статус платежа в БД
                 await update_payment_status_async(payment_id, "canceled")
@@ -1670,12 +1696,12 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Тип платежного метода {payment_method_type} не поддерживает автопродление (поддерживаются: {', '.join(supported_types)})")
             payment_method_id = None  # Не сохраняем для неподдерживаемых типов
         else:
-            from db import save_payment_method, set_auto_renewal
-            await save_payment_method(tg_user_id, payment_method_id)
+        from db import save_payment_method, set_auto_renewal
+        await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-            await set_auto_renewal(tg_user_id, True)
+        await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (saved=True, тип: {payment_method_type})")
             
             # Уведомляем пользователя о сохранении способа оплаты и включении автопродления
@@ -1696,7 +1722,7 @@ async def yookassa_webhook(request: Request):
                     f"• Доступ будет автоматически продлеваться каждые <b>30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
-            else:
+    else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                 )
@@ -1782,18 +1808,18 @@ async def yookassa_webhook(request: Request):
                 )
         
         if not invite_link:
-            # Если и это не получилось, пробуем основную ссылку канала
+                # Если и это не получилось, пробуем основную ссылку канала
             logger.warning(f"⚠️ Вторая попытка не удалась, пробуем основную ссылку канала")
-            try:
-                chat = await bot.get_chat(CHANNEL_ID)
-                if chat.invite_link:
-                    invite_link = chat.invite_link
+                try:
+                    chat = await bot.get_chat(CHANNEL_ID)
+                    if chat.invite_link:
+                        invite_link = chat.invite_link
                     logger.info(f"✅ Используется основная ссылка канала для пользователя {tg_user_id}")
-                else:
-                    raise Exception("У канала нет основной ссылки")
-            except Exception as e3:
+                    else:
+                        raise Exception("У канала нет основной ссылки")
+                except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                raise e3
+                    raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
