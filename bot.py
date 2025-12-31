@@ -1407,9 +1407,9 @@ async def back_to_main_menu(message: Message):
                 [KeyboardButton(text=BTN_ABOUT_1)],
             ]
             menu = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-    await message.answer(
-        "📋 <b>Главное меню</b>",
-        parse_mode="HTML",
+            await message.answer(
+                "📋 <b>Главное меню</b>",
+                parse_mode="HTML",
                 reply_markup=menu
             )
         else:
