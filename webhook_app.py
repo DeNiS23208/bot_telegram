@@ -2284,28 +2284,32 @@ async def yookassa_webhook(request: Request):
             _clear_cache()
             
             # ВАЖНО: Принудительно создаем правильное меню для бонусной недели
+            # КРИТИЧЕСКИ ВАЖНО: Всегда показываем "Управление доступом" после успешной оплаты
+            # независимо от результата has_active_subscription, так как подписка только что была активирована
+            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+            BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            
             if is_bonus_week_active():
-                # Проверяем, есть ли активная подписка
-                has_active_final = await has_active_subscription(tg_user_id)
-                logger.info(f"🔍 Финальная проверка has_active_subscription: {has_active_final}")
-                
-                if has_active_final:
-                    # Принудительно создаем меню с "Управление доступом"
-                    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-                    BTN_MANAGE_SUB = "⚙️ Управление доступом"
-                    BTN_ABOUT_1 = "ℹ️ О проекте"
-                    updated_menu = ReplyKeyboardMarkup(
-                        keyboard=[
-                            [KeyboardButton(text=BTN_MANAGE_SUB)],
-                            [KeyboardButton(text=BTN_ABOUT_1)],
-                        ],
-                        resize_keyboard=True,
-                    )
-                    logger.info(f"✅ Принудительно создано меню с 'Управление доступом' для пользователя {tg_user_id}")
-                else:
-                    updated_menu = await get_main_menu_for_user(tg_user_id)
+                # В бонусной неделе всегда показываем "Управление доступом" после оплаты
+                updated_menu = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text=BTN_MANAGE_SUB)],
+                        [KeyboardButton(text=BTN_ABOUT_1)],
+                    ],
+                    resize_keyboard=True,
+                )
+                logger.info(f"✅ Принудительно создано меню с 'Управление доступом' для пользователя {tg_user_id} (бонусная неделя)")
             else:
-                updated_menu = await get_main_menu_for_user(tg_user_id)
+                # В продакшн режиме тоже всегда показываем "Управление доступом" после оплаты
+                updated_menu = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text=BTN_MANAGE_SUB)],
+                        [KeyboardButton(text=BTN_ABOUT_1)],
+                    ],
+                    resize_keyboard=True,
+                )
+                logger.info(f"✅ Принудительно создано меню с 'Управление доступом' для пользователя {tg_user_id} (продакшн)")
             
             updated_menu_buttons = [btn.text for row in updated_menu.keyboard for btn in row] if hasattr(updated_menu, 'keyboard') else 'N/A'
             logger.info(f"🔍 Обновленное меню для пользователя {tg_user_id}: {updated_menu_buttons}")
