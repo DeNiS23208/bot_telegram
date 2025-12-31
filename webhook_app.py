@@ -761,7 +761,54 @@ async def check_expired_subscriptions():
             # Проверяем подписки, которые истекли
             expired_subs = await get_expired_subscriptions()
             
-            logger.info(f"🔍 Проверка истекших подписок: найдено {len(expired_subs)} подписок")
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: Также проверяем активные подписки из бонусной недели, если бонусная неделя закончилась
+            # Это важно для автопродления бонусных подписок при окончании бонусной недели
+            bonus_week_ended_for_check = not is_bonus_week_active()
+            if bonus_week_ended_for_check:
+                from config import get_bonus_week_start, get_bonus_week_end
+                bonus_week_start_check = get_bonus_week_start()
+                bonus_week_end_check = get_bonus_week_end()
+                if bonus_week_start_check.tzinfo is None:
+                    bonus_week_start_check = bonus_week_start_check.replace(tzinfo=timezone.utc)
+                if bonus_week_end_check.tzinfo is None:
+                    bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
+                
+                # Получаем все активные подписки из бонусной недели
+                async with aiosqlite.connect(DB_PATH) as db_bonus:
+                    cursor_bonus = await db_bonus.execute(
+                        """
+                        SELECT s.telegram_id, s.expires_at, s.auto_renewal_enabled, 
+                               pm.payment_method_id, s.starts_at
+                        FROM subscriptions s
+                        LEFT JOIN payment_methods pm ON s.telegram_id = pm.telegram_id
+                        WHERE s.expires_at > ? AND s.starts_at IS NOT NULL
+                        """,
+                        (datetime.now(timezone.utc).isoformat(),)
+                    )
+                    bonus_active_subs = await cursor_bonus.fetchall()
+                    
+                    # Фильтруем только те, которые были созданы во время бонусной недели
+                    for bonus_row in bonus_active_subs:
+                        bonus_telegram_id = bonus_row[0]
+                        bonus_expires_at_str = bonus_row[1]
+                        bonus_starts_at_str = bonus_row[4] if len(bonus_row) > 4 and bonus_row[4] else None
+                        
+                        is_bonus_sub = False
+                        if bonus_starts_at_str:
+                            try:
+                                bonus_starts_at = datetime.fromisoformat(bonus_starts_at_str)
+                                if bonus_starts_at.tzinfo is None:
+                                    bonus_starts_at = bonus_starts_at.replace(tzinfo=timezone.utc)
+                                is_bonus_sub = bonus_week_start_check <= bonus_starts_at <= bonus_week_end_check
+                            except Exception:
+                                pass
+                        
+                        if is_bonus_sub:
+                            # Добавляем в список для обработки автопродления
+                            expired_subs.append(bonus_row)
+                            logger.info(f"🔍 Добавлена активная бонусная подписка пользователя {bonus_telegram_id} для автопродления (бонусная неделя закончилась)")
+            
+            logger.info(f"🔍 Проверка подписок для автопродления: найдено {len(expired_subs)} подписок (включая активные бонусные)")
             
             for row in expired_subs:
                 telegram_id = row[0]
