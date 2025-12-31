@@ -1650,7 +1650,7 @@ async def yookassa_webhook(request: Request):
                     raise Exception("У канала нет основной ссылки")
             except Exception as e3:
                 logger.error(f"❌ Все попытки создания ссылки не удались: {e3}")
-                    raise e3
+                raise e3
         
         if invite_link:
             logger.info(f"✅ Создана индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date}")
