@@ -1795,7 +1795,13 @@ async def yookassa_webhook(request: Request):
                 "• Не передавайте ссылку другим людям - она работает только для вас"
             )
             logger.info(f"📝 Текст уведомления (первые 200 символов): {notification_text[:200]}...")
-            logger.info(f"🔍 Проверка меню перед отправкой: has_active={await has_active_subscription(tg_user_id)}, menu_keyboard={[btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'}")
+            
+            # Проверяем статус подписки перед отправкой
+            has_active_check = await has_active_subscription(tg_user_id)
+            menu_buttons_before = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
+            logger.info(f"🔍 Проверка меню перед отправкой: has_active={has_active_check}, menu_keyboard={menu_buttons_before}")
+            
+            # Отправляем сообщение об успешной оплате
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
@@ -1803,7 +1809,28 @@ async def yookassa_webhook(request: Request):
                 parse_mode="HTML",
                 reply_markup=menu
             )
-            logger.info(f"✅ Сообщение об успешной оплате отправлено пользователю {tg_user_id} с меню: {[btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'}")
+            
+            # ВАЖНО: Отправляем отдельное сообщение с обновленным меню для гарантированного обновления клавиатуры
+            # Это необходимо, так как Telegram может не обновить меню автоматически
+            await asyncio.sleep(0.5)  # Небольшая задержка для гарантии, что первое сообщение обработано
+            
+            # Получаем меню еще раз для гарантии актуальности
+            from db import _clear_cache
+            _clear_cache()
+            updated_menu = await get_main_menu_for_user(tg_user_id)
+            updated_menu_buttons = [btn.text for row in updated_menu.keyboard for btn in row] if hasattr(updated_menu, 'keyboard') else 'N/A'
+            logger.info(f"🔍 Обновленное меню для пользователя {tg_user_id}: {updated_menu_buttons}")
+            
+            # Отправляем сообщение с обновленным меню для принудительного обновления клавиатуры
+            await safe_send_message(
+                bot=bot,
+                chat_id=tg_user_id,
+                text="⚙️ <b>Меню обновлено</b>\n\nИспользуйте кнопку «⚙️ Управление доступом» для управления автопродлением.",
+                parse_mode="HTML",
+                reply_markup=updated_menu
+            )
+            
+            logger.info(f"✅ Сообщение об успешной оплате и обновленное меню отправлены пользователю {tg_user_id}")
         except Exception as send_error:
             logger.error(f"❌ Ошибка отправки сообщения об успешной оплате пользователю {tg_user_id}: {send_error}")
             import traceback
