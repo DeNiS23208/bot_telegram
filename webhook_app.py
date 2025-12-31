@@ -306,33 +306,31 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     
     # КРИТИЧЕСКИ ВАЖНО: Если активна бонусная неделя, но у пользователя есть активная подписка,
     # показываем меню с "Управление доступом", а не бонусное меню
-    if is_bonus_week_active() and not show_manage_button:
-        # Бонусная неделя активна, но у пользователя нет активной подписки - показываем бонусное меню
-        # Используем функцию из webhook_app.py, а не из db.py
-        # ВАЖНО: Проверяем напрямую в БД для гарантии актуальности
-        has_active = await has_active_subscription(telegram_id)
-        logger.info(f"🔍 get_main_menu_for_user: telegram_id={telegram_id}, is_bonus_week_active={is_bonus_week_active()}, has_active={has_active}")
-        
-        if has_active:
-            # Если есть активная подписка, показываем "Управление доступом"
+    if is_bonus_week_active():
+        if show_manage_button:
+            # У пользователя есть активная подписка - показываем "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
             BTN_ABOUT_1 = "ℹ️ О проекте"
             keyboard = [
                 [KeyboardButton(text=BTN_MANAGE_SUB)],
                 [KeyboardButton(text=BTN_ABOUT_1)],
             ]
+            return ReplyKeyboardMarkup(
+                keyboard=keyboard,
+                resize_keyboard=True,
+            )
         else:
-            # Если нет активной подписки, показываем бонусную неделю
+            # У пользователя нет активной подписки - показываем бонусное меню
             BTN_BONUS_WEEK = "🎁 Бонус в честь запуск канала Наиля Хасанова"
             BTN_ABOUT_1 = "ℹ️ О проекте"
             keyboard = [
                 [KeyboardButton(text=BTN_BONUS_WEEK)],
                 [KeyboardButton(text=BTN_ABOUT_1)],
             ]
-        return ReplyKeyboardMarkup(
-            keyboard=keyboard,
-            resize_keyboard=True,
-        )
+            return ReplyKeyboardMarkup(
+                keyboard=keyboard,
+                resize_keyboard=True,
+            )
     
     # Константы кнопок (должны совпадать с bot.py)
     BTN_PAY_1 = "💳 Получить доступ"
