@@ -658,9 +658,9 @@ async def check_bonus_week_ending_soon():
             minutes_until_end = time_until_end.total_seconds() / 60
             
             # Проверяем, нужно ли отправлять уведомление (за vremya_sms минут до окончания)
-            # Используем погрешность ±1 минуту для надежности (чтобы не пропустить)
-            # Проверяем, что осталось от vremya_sms-1 до vremya_sms+1 минут
-            if vremya_sms - 1 <= minutes_until_end <= vremya_sms + 1:
+            # Используем погрешность ±0.5 минуты для точности (чтобы не пропустить и не отправить слишком рано)
+            # Проверяем, что осталось от vremya_sms-0.5 до vremya_sms+0.5 минут
+            if vremya_sms - 0.5 <= minutes_until_end <= vremya_sms + 0.5:
                 logger.info(f"🔔 Время для уведомления о конце бонусной недели: minutes_until_end={minutes_until_end:.1f}, vremya_sms={vremya_sms}, bonus_week_end={bonus_week_end}, now={now}")
                 for telegram_id, expires_at_str in active_subs:
                     if telegram_id in notified_users:
