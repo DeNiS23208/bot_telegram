@@ -1733,8 +1733,12 @@ async def yookassa_webhook(request: Request):
             
             # Отправляем уведомление о сохранении способа оплаты только один раз
             # Используем payment_id как уникальный ключ для предотвращения дублирования
+            # ВАЖНО: Проверяем, что автопродление все еще включено перед отправкой уведомления
+            from db import is_auto_renewal_enabled
+            auto_renewal_still_enabled = await is_auto_renewal_enabled(tg_user_id)
+            
             notification_key = f"pm_saved_{payment_id}"
-            if not await already_processed(notification_key):
+            if not await already_processed(notification_key) and auto_renewal_still_enabled:
                 await safe_send_message(
                     bot=bot,
                     chat_id=tg_user_id,
@@ -1749,8 +1753,10 @@ async def yookassa_webhook(request: Request):
                 # Помечаем, что уведомление отправлено
                 await mark_processed(notification_key)
                 logger.info(f"✅ Отправлено уведомление о сохранении способа оплаты для пользователя {tg_user_id}, payment_id: {payment_id}")
-            else:
+            elif await already_processed(notification_key):
                 logger.info(f"⏭️ Уведомление о сохранении способа оплаты уже было отправлено для платежа {payment_id}, пропускаем")
+            elif not auto_renewal_still_enabled:
+                logger.info(f"⏭️ Автопродление отключено пользователем {tg_user_id} - не отправляем уведомление о сохранении способа оплаты")
     else:
         if not payment_method_id:
             logger.info(f"ℹ️ Платеж {payment_id}: payment_method_id отсутствует - автопродление НЕ будет включено")

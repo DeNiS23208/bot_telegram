@@ -1485,12 +1485,14 @@ async def cancel_subscription(message: Message):
     # Получаем информацию о подписке
     expires_str = format_datetime_moscow(expires_at)
     
-    # Показываем обновленное меню управления БЕЗ кнопки "Возобновить подписку" (так как карта удалена)
-    # Используем основное меню бонусной недели
-    back_keyboard = await bonus_week_menu()
-    
-    # Получаем обновленное главное меню (теперь должно показывать "Получить доступ")
-    updated_menu = await main_menu(user_id)
+    # После отмены доступа показываем меню ТОЛЬКО с кнопкой "О проекте"
+    # (без кнопки "Бонус в честь запуска")
+    updated_menu = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_ABOUT_1)],
+        ],
+        resize_keyboard=True,
+    )
     
     # Формируем сообщение об отвязке карты
     card_message = ""
