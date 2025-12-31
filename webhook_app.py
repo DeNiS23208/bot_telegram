@@ -708,7 +708,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                    continue
+                        continue
                     else:
                         # Удаляем из processed_users, если прошло больше 2 минут
                         del processed_users[telegram_id]
@@ -1558,7 +1558,7 @@ async def yookassa_webhook(request: Request):
                     f"• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
-    else:
+            else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                 )
