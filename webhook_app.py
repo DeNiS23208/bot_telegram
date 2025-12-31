@@ -652,7 +652,6 @@ async def check_bonus_week_ending_soon():
                             
                             # Получаем время начала и окончания бонусной недели
                             from config import get_bonus_week_start
-                            from webhook_app import format_datetime_moscow
                             bonus_start = get_bonus_week_start()
                             bonus_start_str = format_datetime_moscow(bonus_start.replace(tzinfo=None))
                             bonus_end_str = format_datetime_moscow(bonus_week_end.replace(tzinfo=None))
