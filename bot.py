@@ -1678,47 +1678,39 @@ async def approve_join_request(join_request: ChatJoinRequest):
     if CHANNEL_ID and join_request.chat.id == CHANNEL_ID:
         user_id = join_request.from_user.id
         
-        # КРИТИЧЕСКАЯ ПРОВЕРКА: проверяем, что это владелец ссылки
-        # Получаем ссылку пользователя из БД
-        invite_link = await get_invite_link(user_id)
+        # УПРОЩЕННАЯ ЛОГИКА: проверяем, есть ли у пользователя активная подписка
+        # Если есть активная подписка, значит у него есть валидная ссылка
+        from db import get_subscription_expires_at
+        expires_at = await get_subscription_expires_at(user_id)
         
-        if invite_link:
-            # Проверяем, что ссылка принадлежит этому пользователю
-            from db import get_telegram_user_id_by_invite_link, get_subscription_expires_at
-            link_owner_id = await get_telegram_user_id_by_invite_link(invite_link)
+        if expires_at:
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
             
-            # Проверяем, что у владельца есть активная подписка
-            if link_owner_id:
-                expires_at = await get_subscription_expires_at(link_owner_id)
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc)
-                
-                # Убеждаемся, что expires_at имеет timezone для сравнения
-                if expires_at and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
-                
-                has_active_subscription = expires_at and expires_at > now
-            else:
-                has_active_subscription = False
+            # Убеждаемся, что expires_at имеет timezone для сравнения
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             
-            # Одобряем заявку ТОЛЬКО если:
-            # 1. Пользователь является владельцем ссылки
-            # 2. У владельца есть активная подписка
-            if link_owner_id and link_owner_id == user_id and has_active_subscription:
+            has_active_subscription = expires_at > now
+            
+            if has_active_subscription:
+                # У пользователя есть активная подписка - одобряем заявку
                 try:
                     await join_request.approve()
-                    print(f"✅ Автоматически одобрена заявка от владельца ссылки {user_id}")
+                    print(f"✅ Автоматически одобрена заявка от пользователя {user_id} (активная подписка до {expires_at})")
                 except Exception as e:
                     print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
-                # Отклоняем заявку - это не владелец ссылки или подписка истекла
+                # Подписка истекла - отклоняем заявку
                 try:
                     await join_request.decline()
-                    print(f"🚫 Заявка от пользователя {user_id} отклонена (не владелец ссылки или подписка истекла, owner: {link_owner_id})")
+                    print(f"🚫 Заявка от пользователя {user_id} отклонена (подписка истекла, expires_at: {expires_at})")
                 except Exception as e:
-                    print(f"⚠️ Ошибка при отклонении заявки от {user_id}: {e}")
+                    print(f"❌ Ошибка при отклонении заявки от {user_id}: {e}")
         else:
-            # У пользователя нет ссылки - проверяем старый способ (для обратной совместимости)
+            # У пользователя нет подписки - проверяем старый способ (для обратной совместимости)
             if await is_user_allowed(user_id):
                 try:
                     await join_request.approve()
