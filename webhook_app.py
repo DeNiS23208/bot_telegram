@@ -1805,14 +1805,15 @@ async def yookassa_webhook(request: Request):
     # ВАЖНО: Для бонусной недели устанавливаем expires_at = bonus_week_end напрямую
     if is_bonus_week_active() and remaining_time and remaining_time.total_seconds() > 0:
         # Устанавливаем expires_at = bonus_week_end напрямую, чтобы не было проблем с округлением
-        starts_at = datetime.now(timezone.utc)
+        # ВАЖНО: Используем tz.utc, так как мы импортировали timezone как tz выше
+        starts_at = datetime.now(tz.utc)
         expires_at = bonus_end  # Используем конец бонусной недели напрямую
         
         async with aiosqlite.connect(DB_PATH) as db_conn:
             # гарантируем, что юзер существует
             await db_conn.execute(
                 "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
-                (tg_user_id, None, datetime.now(timezone.utc).isoformat())
+                (tg_user_id, None, datetime.now(tz.utc).isoformat())
             )
             
             # upsert подписки (сохраняем дату начала и окончания)
