@@ -249,8 +249,15 @@ async def cmd_start(message: Message):
         
         # Форматируем время начала и окончания бонусной недели
         bonus_start = get_bonus_week_start()
-        bonus_start_moscow = format_datetime_moscow(bonus_start.replace(tzinfo=None))
-        bonus_end_moscow = format_datetime_moscow(bonus_end.replace(tzinfo=None))
+        # Убеждаемся, что datetime имеет timezone для правильного форматирования
+        if bonus_start.tzinfo is None:
+            from datetime import timezone
+            bonus_start = bonus_start.replace(tzinfo=timezone.utc)
+        if bonus_end.tzinfo is None:
+            from datetime import timezone
+            bonus_end = bonus_end.replace(tzinfo=timezone.utc)
+        bonus_start_moscow = format_datetime_moscow(bonus_start)
+        bonus_end_moscow = format_datetime_moscow(bonus_end)
         
         welcome_text = (
             "👋 <b>Добро пожаловать!</b>\n\n"
@@ -706,8 +713,15 @@ async def bonus_week_info(message: Message):
     
     # Форматируем время начала и окончания бонусной недели
     bonus_start = get_bonus_week_start()
-    bonus_start_moscow = format_datetime_moscow(bonus_start.replace(tzinfo=None))
-    bonus_end_moscow = format_datetime_moscow(bonus_end.replace(tzinfo=None))
+    # Убеждаемся, что datetime имеет timezone для правильного форматирования
+    if bonus_start.tzinfo is None:
+        from datetime import timezone
+        bonus_start = bonus_start.replace(tzinfo=timezone.utc)
+    if bonus_end.tzinfo is None:
+        from datetime import timezone
+        bonus_end = bonus_end.replace(tzinfo=timezone.utc)
+    bonus_start_moscow = format_datetime_moscow(bonus_start)
+    bonus_end_moscow = format_datetime_moscow(bonus_end)
     
     bonus_text = (
         "🎉 <b>БОНУСНАЯ НЕДЕЛЯ В ЧЕСТЬ ЗАПУСКА КАНАЛА!</b>\n\n"

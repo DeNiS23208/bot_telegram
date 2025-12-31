@@ -662,8 +662,13 @@ async def check_bonus_week_ending_soon():
                             # Получаем время начала и окончания бонусной недели
                             from config import get_bonus_week_start
                             bonus_start = get_bonus_week_start()
-                            bonus_start_str = format_datetime_moscow(bonus_start.replace(tzinfo=None))
-                            bonus_end_str = format_datetime_moscow(bonus_week_end.replace(tzinfo=None))
+                            # Убеждаемся, что datetime имеет timezone для правильного форматирования
+                            if bonus_start.tzinfo is None:
+                                bonus_start = bonus_start.replace(tzinfo=timezone.utc)
+                            if bonus_week_end.tzinfo is None:
+                                bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+                            bonus_start_str = format_datetime_moscow(bonus_start)
+                            bonus_end_str = format_datetime_moscow(bonus_week_end)
                             
                             if auto_renewal_enabled:
                                 notification_text = (
