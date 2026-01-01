@@ -253,7 +253,7 @@ async def mark_processed(payment_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
         "INSERT OR IGNORE INTO processed_payments(payment_id, processed_at) VALUES (?, ?)",
-        (payment_id, datetime.utcnow().isoformat())
+        (payment_id, datetime.now(timezone.utc).isoformat())
     )
         await db.commit()
 
@@ -263,7 +263,7 @@ async def allow_user(tg_user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
         "INSERT OR REPLACE INTO approved_users(telegram_user_id, approved_at) VALUES (?, ?)",
-        (tg_user_id, datetime.utcnow().isoformat())
+        (tg_user_id, datetime.now(timezone.utc).isoformat())
     )
         await db.commit()
 
@@ -273,7 +273,7 @@ async def save_invite_link(invite_link: str, telegram_user_id: int, payment_id: 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
         "INSERT OR REPLACE INTO invite_links(invite_link, telegram_user_id, payment_id, created_at) VALUES (?, ?, ?, ?)",
-        (invite_link, telegram_user_id, payment_id, datetime.utcnow().isoformat())
+        (invite_link, telegram_user_id, payment_id, datetime.now(timezone.utc).isoformat())
     )
         await db.commit()
 
@@ -305,9 +305,12 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
     show_manage_button = has_active_subscription and auto_renewal_enabled
     
-    # КРИТИЧЕСКИ ВАЖНО: Если активна бонусная неделя, но у пользователя есть активная подписка,
-    # показываем меню с "Управление доступом", а не бонусное меню
-    if is_bonus_week_active():
+    # КРИТИЧЕСКИ ВАЖНО: Показываем бонусное меню ТОЛЬКО если:
+    # 1. Бонусная неделя активна
+    # 2. У пользователя НЕТ активной подписки (или автопродление отключено)
+    # Если бонусная неделя закончилась - ВСЕГДА показываем продакшн меню
+    bonus_week_active = is_bonus_week_active()
+    if bonus_week_active and not show_manage_button:
         if show_manage_button:
             # У пользователя есть активная подписка - показываем "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
@@ -322,7 +325,7 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
             )
         else:
             # У пользователя нет активной подписки - показываем бонусное меню
-            BTN_BONUS_WEEK = "🎁 Бонус в честь запуск канала Наиля Хасанова"
+            BTN_BONUS_WEEK = "🎁 Бонус в честь запуска канала Наиля Хасанова"
             BTN_ABOUT_1 = "ℹ️ О проекте"
             keyboard = [
                 [KeyboardButton(text=BTN_BONUS_WEEK)],
@@ -443,7 +446,7 @@ async def get_expired_pending_payments():
     """Получает список платежей со статусом pending, которые старше N минут"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
         # Платежи старше N минут со статусом pending (НЕ canceled и НЕ expired)
-        cutoff_time = (datetime.utcnow() - timedelta(minutes=PAYMENT_LINK_VALID_MINUTES)).isoformat()
+        cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=PAYMENT_LINK_VALID_MINUTES)).isoformat()
         cursor = await db_conn.execute(
             """
             SELECT telegram_id, payment_id, created_at 
@@ -452,7 +455,7 @@ async def get_expired_pending_payments():
             AND created_at < ?
             AND created_at > ?
             """,
-            (cutoff_time, (datetime.utcnow() - timedelta(hours=24)).isoformat())  # Только за последние 24 часа
+            (cutoff_time, (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat())  # Только за последние 24 часа
         )
         rows = await cursor.fetchall()
         return rows
@@ -483,7 +486,7 @@ async def get_expired_subscriptions():
 async def get_subscriptions_expiring_soon():
     """Получает список подписок, которые истекают через N дней (для уведомления)"""
     async with aiosqlite.connect(DB_PATH) as db_conn:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Подписки, которые истекают через N дней (с небольшой погрешностью)
         target_date = now + timedelta(days=SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS)
         # Проверяем подписки, которые истекают в течение окна уведомления
@@ -519,7 +522,7 @@ async def check_expired_payments():
                 # Проверяем точное время истечения - должно быть ровно 10 минут (с погрешностью ±1 минута)
                 try:
                     created_at_dt = datetime.fromisoformat(created_at)
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc)
                     time_since_creation = (now - created_at_dt).total_seconds() / 60  # в минутах
                     
                     # Проверяем, что прошло ровно 10 минут (с погрешностью ±1 минута из-за интервала проверки)
@@ -585,7 +588,7 @@ async def check_expired_payments():
                     
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновой задаче проверки платежей: {e}")
-            await asyncio.sleep(60)  # Ждем перед следующей попыткой
+            await asyncio.sleep(10)  # Уменьшено для более точного срабатывания  # Ждем перед следующей попыткой
 
 
 async def check_subscriptions_expiring_soon():
@@ -643,33 +646,41 @@ async def check_subscriptions_expiring_soon():
 
 
 async def check_bonus_week_transition_to_production():
-    """Проверяет переход в продакшн режим после окончания бонусной недели и отправляет уведомления"""
+    """Проверяет переход в продакшн режим после окончания бонусной недели и выполняет все необходимые действия:
+    1. Отправляет уведомление о окончании бонусной недели
+    2. Обновляет меню на продакшн режим для всех
+    3. Выполняет автопродление для пользователей с включенным автопродлением
+    4. Выдает новую ссылку после успешного автопродления
+    """
     notified_users_production = set()  # Чтобы не отправлять несколько раз одному пользователю
     
     while True:
         try:
-            await asyncio.sleep(60)  # Проверяем каждую минуту
+            await asyncio.sleep(10)  # Проверяем каждые 10 секунд для более точного срабатывания
             
-            # Проверяем, закончилась ли бонусная неделя (прошло более 1 минуты после окончания)
+            # Проверяем, закончилась ли бонусная неделя
             if is_bonus_week_active():
                 notified_users_production.clear()
                 continue
             
-            from config import get_bonus_week_end
+            from config import get_bonus_week_end, get_bonus_week_start
             bonus_week_end = get_bonus_week_end()
+            bonus_week_start = get_bonus_week_start()
             if bonus_week_end.tzinfo is None:
                 bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+            if bonus_week_start.tzinfo is None:
+                bonus_week_start = bonus_week_start.replace(tzinfo=timezone.utc)
             
             now = datetime.now(timezone.utc)
             time_since_bonus_end = (now - bonus_week_end).total_seconds() / 60
             
-            # Отправляем уведомление только если прошло более 1 минуты после окончания бонусной недели
-            # и не более 5 минут (чтобы не отправлять старые уведомления)
-            if 1 <= time_since_bonus_end <= 5:
-                logger.info(f"🔔 Время для уведомления о переходе в продакшн режим: прошло {time_since_bonus_end:.1f} минут после окончания бонусной недели")
+            # Обрабатываем пользователей сразу после окончания бонусной недели (0-3 минуты)
+            # Это гарантирует срабатывание в момент окончания (через 10 минут)
+            if 0 <= time_since_bonus_end <= 3:
+                logger.info(f"🔔 Обработка окончания бонусной недели: прошло {time_since_bonus_end:.1f} минут после окончания")
                 
-                # Получаем всех пользователей с активными подписками из бонусной недели
-                from db import get_all_active_subscriptions
+                # Получаем всех пользователей с активными подписками
+                from db import get_all_active_subscriptions, get_subscription_info, get_saved_payment_method_id
                 active_subs = await get_all_active_subscriptions()
                 
                 for telegram_id, expires_at_str in active_subs:
@@ -681,45 +692,271 @@ async def check_bonus_week_transition_to_production():
                         if expires_at.tzinfo is None:
                             expires_at = expires_at.replace(tzinfo=timezone.utc)
                         
-                        # Проверяем, что это подписка из бонусной недели (истекает до или в момент окончания)
-                        if expires_at <= bonus_week_end or (expires_at - bonus_week_end).total_seconds() / 60 <= 2:
-                            # Отправляем уведомление о переходе в продакшн режим
-                            from db import is_auto_renewal_enabled
-                            auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
-                            
-                            if auto_renewal_enabled:
-                                notification_text = (
-                                    "🎉 <b>Бонусная неделя закончилась!</b>\n\n"
-                                    "✅ Бот перешел в продакшн режим.\n\n"
-                                    "🔄 <b>Автопродление:</b>\n"
-                                    "• Система автоматически попытается списать полную стоимость: <b>2990 рублей на 30 дней</b>\n"
-                                    "• Если списание успешно, вы получите уведомление\n"
-                                    "• Если списание не удалось, вы получите уведомление и будете удалены из канала\n\n"
-                                    "⚙️ Вы можете управлять автопродлением в меню «Управление доступом»."
-                                )
-                            else:
-                                notification_text = (
-                                    "🎉 <b>Бонусная неделя закончилась!</b>\n\n"
-                                    "✅ Бот перешел в продакшн режим.\n\n"
-                                    "⚠️ <b>Автопродление отключено:</b>\n"
-                                    "• Ваш доступ в канал закончится\n"
-                                    "• Для возобновления доступа используйте кнопку 💳 Получить доступ"
-                                )
-                            
-                            await safe_send_message(
-                                bot=bot,
-                                chat_id=telegram_id,
-                                text=notification_text,
-                                parse_mode="HTML"
+                        # Получаем полную информацию о подписке
+                        sub_info = await get_subscription_info(telegram_id)
+                        if not sub_info:
+                            continue
+                        
+                        starts_at = sub_info.get('starts_at')
+                        if starts_at and starts_at.tzinfo is None:
+                            starts_at = starts_at.replace(tzinfo=timezone.utc)
+                        
+                        # Проверяем, что это подписка из бонусной недели
+                        is_bonus_subscription = False
+                        if starts_at:
+                            is_bonus_subscription = bonus_week_start <= starts_at <= bonus_week_end
+                        elif expires_at <= bonus_week_end or (expires_at - bonus_week_end).total_seconds() / 60 <= 2:
+                            is_bonus_subscription = True
+                        
+                        if not is_bonus_subscription:
+                            continue
+                        
+                        # Получаем информацию об автопродлении
+                        auto_renewal_enabled = sub_info.get('auto_renewal_enabled', False)
+                        saved_payment_method_id = sub_info.get('saved_payment_method_id')
+                        
+                        logger.info(f"🔍 Обработка пользователя {telegram_id}: auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
+                        
+                        # 1. Отправляем уведомление о окончании бонусной недели
+                        if auto_renewal_enabled and saved_payment_method_id:
+                            notification_text = (
+                                "🎉 <b>Бонусная неделя закончилась!</b>\n\n"
+                                "✅ Бот перешел в продакшн режим.\n\n"
+                                "🔄 <b>Автопродление:</b>\n"
+                                "• Сейчас будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+                                "• Вы получите уведомление о результате\n\n"
+                                "⚙️ Вы можете управлять автопродлением в меню «Управление доступом»."
                             )
-                            notified_users_production.add(telegram_id)
-                            logger.info(f"✅ Отправлено уведомление о переходе в продакшн режим пользователю {telegram_id}")
+                        else:
+                            notification_text = (
+                                "🎉 <b>Бонусная неделя закончилась!</b>\n\n"
+                                "✅ Бот перешел в продакшн режим.\n\n"
+                                "⚠️ <b>Автопродление отключено:</b>\n"
+                                "• Ваш доступ в канал закончится\n"
+                                "• Для возобновления доступа используйте кнопку 💳 Получить доступ"
+                            )
+                        
+                        # 2. Обновляем меню на продакшн режим для ВСЕХ пользователей (ПЕРЕД отправкой уведомления)
+                        from db import _clear_cache
+                        _clear_cache()
+                        menu = await get_main_menu_for_user(telegram_id)
+                        
+                        # Отправляем уведомление С обновленным меню
+                        await safe_send_message(
+                            bot=bot,
+                            chat_id=telegram_id,
+                            text=notification_text,
+                            parse_mode="HTML",
+                            reply_markup=menu
+                        )
+                        logger.info(f"✅ Отправлено уведомление о окончании бонусной недели пользователю {telegram_id} с обновленным меню")
+                        
+                        # 3. Для пользователей с автопродлением - выполняем автопродление
+                        if auto_renewal_enabled and saved_payment_method_id:
+                            try:
+                                from payments import create_auto_payment, get_payment_status
+                                from db import activate_subscription_days, save_payment, update_payment_status, get_subscription_expires_at
+                                
+                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                                auto_amount = get_production_subscription_price()
+                                auto_duration = get_production_subscription_duration()
+                                
+                                logger.info(f"🔄 Выполнение автопродления для пользователя {telegram_id}: {auto_amount} руб, {auto_duration} дней")
+                                
+                                # Создаем автоматический платеж
+                                payment_id, payment_status = create_auto_payment(
+                                    amount_rub=auto_amount,
+                                    description=f"Автопродление доступа на канал ({format_subscription_duration(auto_duration)})",
+                                    customer_email=CUSTOMER_EMAIL,
+                                    telegram_user_id=telegram_id,
+                                    payment_method_id=saved_payment_method_id,
+                                )
+                                
+                                # Сохраняем платеж
+                                await save_payment(telegram_id, payment_id, status=payment_status)
+                                
+                                # Ждем немного для обработки webhook
+                                await asyncio.sleep(3)
+                                
+                                # Проверяем статус платежа
+                                refreshed_status = get_payment_status(payment_id)
+                                await update_payment_status(payment_id, refreshed_status)
+                                
+                                if refreshed_status == "succeeded":
+                                    # Платеж успешен - активируем подписку
+                                    await activate_subscription_days(telegram_id, days=auto_duration)
+                                    _clear_cache()
+                                    
+                                    # 4. Выдаем новую ссылку после успешного автопродления
+                                    subscription_expires_at = await get_subscription_expires_at(telegram_id)
+                                    link_expire_date = subscription_expires_at if subscription_expires_at else (datetime.now(timezone.utc) + timedelta(days=auto_duration))
+                                    
+                                    invite_link = await safe_create_invite_link(
+                                        bot=bot,
+                                        chat_id=CHANNEL_ID,
+                                        creates_join_request=True,
+                                        expire_date=link_expire_date
+                                    )
+                                    
+                                    if not invite_link:
+                                        invite_link = await safe_create_invite_link(
+                                            bot=bot,
+                                            chat_id=CHANNEL_ID,
+                                            creates_join_request=False,
+                                            member_limit=1,
+                                            expire_date=link_expire_date
+                                        )
+                                    
+                                    if invite_link:
+                                        await save_invite_link(invite_link, telegram_id, payment_id)
+                                        
+                                        # Отправляем уведомление об успешном автопродлении со ссылкой
+                                        amount_float = float(auto_amount)
+                                        if amount_float == 1:
+                                            ruble_text = "рубль"
+                                        elif 2 <= amount_float <= 4:
+                                            ruble_text = "рубля"
+                                        else:
+                                            ruble_text = "рублей"
+                                        
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text=(
+                                                "✅ <b>Доступ автоматически продлен!</b>\n\n"
+                                                f"Списано {auto_amount} {ruble_text} с вашего способа оплаты.\n"
+                                                f"Доступ продлен на {format_subscription_duration(auto_duration)}.\n\n"
+                                                "Нажмите на ссылку ниже, чтобы попасть в канал:\n"
+                                                f"{invite_link}\n\n"
+                                                "⚠️ ВНИМАНИЕ: Ссылка одноразовая и персональная. Не передавайте её другим людям!"
+                                            ),
+                                            parse_mode="HTML"
+                                        )
+                                        logger.info(f"✅ Автопродление успешно выполнено для пользователя {telegram_id}, выдана новая ссылка")
+                                    else:
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text=(
+                                                "✅ <b>Доступ автоматически продлен!</b>\n\n"
+                                                f"Списано {auto_amount} {ruble_text} с вашего способа оплаты.\n"
+                                                f"Доступ продлен на {format_subscription_duration(auto_duration)}.\n\n"
+                                                "⚠️ Произошла ошибка при создании ссылки. Пожалуйста, свяжитесь с администратором."
+                                            ),
+                                            parse_mode="HTML"
+                                        )
+                                else:
+                                    # Платеж не прошел - проверяем причину и обрабатываем
+                                    from db import set_auto_renewal
+                                    from yookassa import Payment as YooPayment
+                                    
+                                    # Проверяем детали платежа для определения причины отказа
+                                    insufficient_funds = False
+                                    try:
+                                        payment_obj = YooPayment.find_one(payment_id)
+                                        if hasattr(payment_obj, 'cancellation_details') and payment_obj.cancellation_details:
+                                            cd = payment_obj.cancellation_details
+                                            reason = None
+                                            party = None
+                                            if hasattr(cd, 'reason'):
+                                                reason = cd.reason
+                                            elif isinstance(cd, dict):
+                                                reason = cd.get('reason')
+                                            if hasattr(cd, 'party'):
+                                                party = cd.party
+                                            elif isinstance(cd, dict):
+                                                party = cd.get('party')
+                                            
+                                            # Проверяем, является ли это ошибка недостаточности средств
+                                            if reason and ('insufficient_funds' in str(reason).lower() or 'not_enough_money' in str(reason).lower() or 'недостаточно' in str(reason).lower()):
+                                                insufficient_funds = True
+                                                logger.info(f"💰 Обнаружена недостаточность средств для пользователя {telegram_id}, payment_id: {payment_id}, reason: {reason}")
+                                    except Exception as payment_check_error:
+                                        logger.warning(f"⚠️ Ошибка проверки деталей платежа {payment_id}: {payment_check_error}")
+                                    
+                                    # Отключаем автопродление
+                                    await set_auto_renewal(telegram_id, False)
+                                    _clear_cache()
+                                    
+                                    # Отзываем ссылку пользователя
+                                    from db import get_invite_link
+                                    user_invite_link = await get_invite_link(telegram_id)
+                                    if user_invite_link:
+                                        await revoke_invite_link(user_invite_link)
+                                        logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за неудачного автопродления")
+                                    
+                                    # Баним пользователя в канале
+                                    try:
+                                        await bot.ban_chat_member(
+                                            chat_id=CHANNEL_ID,
+                                            user_id=telegram_id,
+                                            until_date=None  # Бан навсегда
+                                        )
+                                        logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за неудачного автопродления")
+                                    except Exception as ban_error:
+                                        logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                                    
+                                    # Отправляем сообщение о недостаточности средств (если это причина) или об общей ошибке
+                                    if insufficient_funds:
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text=(
+                                                "⚠️ <b>У вас недостаточно средств</b>\n\n"
+                                                "На вашей карте недостаточно средств для автопродления подписки.\n"
+                                                "Автопродление и доступ будут закрыты.\n\n"
+                                                "Для возобновления доступа используйте кнопку 💳 Получить доступ."
+                                            ),
+                                            parse_mode="HTML"
+                                        )
+                                        logger.warning(f"💰 Недостаточность средств для пользователя {telegram_id}, payment_id: {payment_id}")
+                                    else:
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text=(
+                                                "⚠️ <b>Автопродление не удалось</b>\n\n"
+                                                "Не удалось списать средства с вашего способа оплаты.\n"
+                                                "Автопродление автоматически отключено.\n\n"
+                                                "Для продления доступа используйте кнопку 💳 Получить доступ."
+                                            ),
+                                            parse_mode="HTML"
+                                        )
+                                    
+                                    # Отправляем уведомление об истечении доступа с обновленным меню
+                                    from db import get_subscription_expired_notified, set_subscription_expired_notified
+                                    already_notified_expired = await get_subscription_expired_notified(telegram_id)
+                                    if not already_notified_expired:
+                                        menu = await get_main_menu_for_user(telegram_id)
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text="⏰ <b>Ваш доступ истек</b>\n\n"
+                                                "Для продления доступа нажмите кнопку 💳 Получить доступ.",
+                                            parse_mode="HTML",
+                                            reply_markup=menu
+                                        )
+                                        await set_subscription_expired_notified(telegram_id, True)
+                                        logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с обновленным меню")
+                                    
+                                    logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, статус: {refreshed_status}, insufficient_funds: {insufficient_funds}")
+                                    
+                            except Exception as auto_error:
+                                logger.error(f"❌ Ошибка автопродления для пользователя {telegram_id}: {auto_error}")
+                                import traceback
+                                traceback.print_exc()
+                        
+                        # Помечаем пользователя как обработанного
+                        notified_users_production.add(telegram_id)
+                        
                     except Exception as e:
-                        logger.error(f"❌ Ошибка отправки уведомления о переходе в продакшн режим пользователю {telegram_id}: {e}")
+                        logger.error(f"❌ Ошибка обработки пользователя {telegram_id}: {e}")
+                        import traceback
+                        traceback.print_exc()
             
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновой задаче проверки перехода в продакшн режим: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
 
 
 async def check_bonus_week_ending_soon():
@@ -729,7 +966,7 @@ async def check_bonus_week_ending_soon():
     while True:
         try:
             # Проверяем каждую минуту для точного уведомления
-            await asyncio.sleep(60)
+            await asyncio.sleep(10)  # Уменьшено для более точного срабатывания
             
             if not is_bonus_week_active():
                 # Если бонусная неделя не активна, очищаем кэш и продолжаем
@@ -821,7 +1058,7 @@ async def check_bonus_week_ending_soon():
                     
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновой задаче проверки окончания бонусной недели: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(10)  # Уменьшено для более точного срабатывания
 
 
 async def check_expired_subscriptions():
@@ -832,10 +1069,21 @@ async def check_expired_subscriptions():
         try:
             await asyncio.sleep(CHECK_EXPIRED_SUBSCRIPTIONS_INTERVAL_SECONDS)
             
-            # Очищаем processed_users от записей старше 5 минут (чтобы можно было повторить попытку)
+            # ВАЖНО: Очищаем processed_users от записей старше 5 минут (чтобы можно было повторить попытку)
+            # НО: НЕ удаляем пользователей, для которых уже было отправлено уведомление об истечении доступа
+            # Это предотвращает повторную обработку и возможные нежелательные действия (например, автоматическую отправку /start)
             now_check = datetime.now(timezone.utc)
             expired_processed = []
             for uid, ts in processed_users.items():
+                # Проверяем, было ли уже отправлено уведомление об истечении доступа
+                from db import get_subscription_expired_notified
+                already_notified = await get_subscription_expired_notified(uid)
+                
+                # НЕ удаляем пользователей, для которых уже было отправлено уведомление об истечении
+                if already_notified:
+                    logger.debug(f"🔒 Пользователь {uid} не будет удален из processed_users (уведомление об истечении уже отправлено)")
+                    continue
+                
                 # Убеждаемся, что ts имеет timezone
                 if isinstance(ts, str):
                     ts_dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
@@ -909,6 +1157,14 @@ async def check_expired_subscriptions():
                 
                 logger.info(f"📋 Обработка подписки пользователя {telegram_id}: expires_at={expires_at_str}, starts_at={starts_at_str}, auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}")
                 
+                # КРИТИЧНО: Проверяем, было ли уже отправлено уведомление об истечении доступа
+                # Если да, НЕ обрабатываем пользователя повторно, чтобы избежать нежелательных действий
+                from db import get_subscription_expired_notified
+                already_notified_expired = await get_subscription_expired_notified(telegram_id)
+                if already_notified_expired:
+                    logger.info(f"🔒 Пользователь {telegram_id} уже получил уведомление об истечении доступа - пропускаем обработку (защита от повторных действий)")
+                    continue
+                
                 # Проверяем, был ли пользователь обработан недавно (в течение последних 2 минут)
                 if telegram_id in processed_users:
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
@@ -916,9 +1172,8 @@ async def check_expired_subscriptions():
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
                         continue
                     else:
-                        # Удаляем из processed_users, если прошло больше 2 минут
-                        del processed_users[telegram_id]
-                        logger.info(f"🔄 Пользователь {telegram_id} был обработан {time_since_processed:.0f} секунд назад, повторяем попытку")
+                        # НЕ удаляем из processed_users автоматически - пусть остается до очистки выше
+                        logger.info(f"🔄 Пользователь {telegram_id} был обработан {time_since_processed:.0f} секунд назад, продолжаем обработку")
                     
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
@@ -1119,29 +1374,31 @@ async def check_expired_subscriptions():
                                     # Проверяем статус еще раз
                                     refreshed_status = get_payment_status(payment_id)
                                     await update_payment_status(payment_id, refreshed_status)
+                                    payment_status = refreshed_status  # Обновляем payment_status для дальнейшей проверки
                                     if refreshed_status != "succeeded":
                                         auto_payment_failed = True
                                         logger.warning(f"⚠️ Автоплатеж {payment_id} для пользователя {telegram_id} не завершился успешно после ожидания, статус: {refreshed_status}")
                                     else:
-                                        payment_status = refreshed_status
                                         logger.info(f"✅ Автоплатеж {payment_id} для пользователя {telegram_id} успешно завершен после ожидания.")
                                 
                                 # КРИТИЧЕСКАЯ ПРОВЕРКА: Убеждаемся, что платеж действительно успешен
                                 # Проверяем статус платежа из API YooKassa перед обработкой
+                                final_payment_status = payment_status  # Используем актуальный статус
                                 try:
                                     from yookassa import Payment
                                     payment_api_check = Payment.find_one(payment_id)
-                                    if payment_api_check.status != "succeeded":
-                                        logger.warning(f"⚠️ Пропуск автопродления для пользователя {telegram_id}: платеж {payment_id} не имеет статус 'succeeded' в API (статус: {payment_api_check.status})")
+                                    final_payment_status = payment_api_check.status  # Используем статус из API как финальный
+                                    if final_payment_status != "succeeded":
+                                        logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}: платеж {payment_id} не имеет статус 'succeeded' в API (статус: {final_payment_status})")
                                         auto_payment_failed = True
-                                        continue
+                                        # НЕ делаем continue - обработаем ниже недостаточность средств
                                 except Exception as api_check_error:
                                     logger.error(f"❌ Ошибка проверки статуса платежа {payment_id} в API: {api_check_error}")
                                     auto_payment_failed = True
-                                    continue
+                                    # НЕ делаем continue - обработаем ниже недостаточность средств
                                 
                                 # Если платеж успешен (сразу или после ожидания)
-                                if payment_status == "succeeded" and not auto_payment_failed:
+                                if final_payment_status == "succeeded" and not auto_payment_failed:
                                     # ВАЖНО: Проверяем, что платеж действительно существует в БД и имеет статус "succeeded"
                                     # Это предотвращает отправку уведомлений о несуществующих платежах
                                     async with aiosqlite.connect(DB_PATH) as db_check_payment:
@@ -1322,28 +1579,103 @@ async def check_expired_subscriptions():
                                     )
                                     logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}, меню обновлено")
                                 else:
-                                    # Платеж не прошел - ОТКЛЮЧАЕМ автопродление автоматически
+                                    # Платеж не прошел - проверяем причину и обрабатываем
                                     auto_payment_failed = True
-                                    logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, payment_id: {payment_id}, status: {payment_status}")
+                                    logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, payment_id: {payment_id}, final_status: {final_payment_status}")
+                                    
+                                    # Проверяем детали платежа для определения причины отказа (недостаточность средств)
+                                    insufficient_funds = False
+                                    try:
+                                        # Используем payment_api_check если он уже был получен, иначе получаем заново
+                                        payment_obj = payment_api_check if 'payment_api_check' in locals() else Payment.find_one(payment_id)
+                                        if hasattr(payment_obj, 'cancellation_details') and payment_obj.cancellation_details:
+                                            cd = payment_obj.cancellation_details
+                                            reason = None
+                                            party = None
+                                            if hasattr(cd, 'reason'):
+                                                reason = cd.reason
+                                            elif isinstance(cd, dict):
+                                                reason = cd.get('reason')
+                                            if hasattr(cd, 'party'):
+                                                party = cd.party
+                                            elif isinstance(cd, dict):
+                                                party = cd.get('party')
+                                            
+                                            # Проверяем, является ли это ошибка недостаточности средств
+                                            if reason and ('insufficient_funds' in str(reason).lower() or 'not_enough_money' in str(reason).lower() or 'недостаточно' in str(reason).lower()):
+                                                insufficient_funds = True
+                                                logger.info(f"💰 Обнаружена недостаточность средств для пользователя {telegram_id}, payment_id: {payment_id}, reason: {reason}")
+                                    except Exception as payment_check_error:
+                                        logger.warning(f"⚠️ Ошибка проверки деталей платежа {payment_id}: {payment_check_error}")
                                     
                                     # Автоматически отключаем автопродление при неудаче
                                     from db import set_auto_renewal
                                     await set_auto_renewal(telegram_id, False)
+                                    _clear_cache()
                                     logger.info(f"🔄 Автопродление автоматически отключено для пользователя {telegram_id} из-за неудачного автоплатежа")
                                     
-                                    # ВАЖНО: После неудачного автопродления обновляем меню на продакшн режим
-                                    # Очищаем кэш и получаем актуальное меню
-                                    from db import _clear_cache
-                                    _clear_cache()
-                                    menu = await get_main_menu_for_user(telegram_id)
-                                    await safe_send_message(
-                                        bot=bot,
-                                        chat_id=telegram_id,
-                                        text="📱 <b>Меню обновлено</b>",
-                                        reply_markup=menu
-                                    )
+                                    # Отзываем ссылку пользователя
+                                    from db import get_invite_link
+                                    user_invite_link = await get_invite_link(telegram_id)
+                                    if user_invite_link:
+                                        await revoke_invite_link(user_invite_link)
+                                        logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за неудачного автопродления")
                                     
-                                    # Уведомление об отключении автопродления будет отправлено ниже в блоке if auto_payment_failed
+                                    # Баним пользователя в канале
+                                    try:
+                                        await bot.ban_chat_member(
+                                            chat_id=CHANNEL_ID,
+                                            user_id=telegram_id,
+                                            until_date=None  # Бан навсегда
+                                        )
+                                        logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за неудачного автопродления")
+                                    except Exception as ban_error:
+                                        logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                                    
+                                    # Отправляем сообщение о недостаточности средств (если это причина) или об общей ошибке
+                                    menu = await get_main_menu_for_user(telegram_id)
+                                    if insufficient_funds:
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text=(
+                                                "⚠️ <b>У вас недостаточно средств</b>\n\n"
+                                                "На вашей карте недостаточно средств для автопродления подписки.\n"
+                                                "Автопродление и доступ будут закрыты.\n\n"
+                                                "Для возобновления доступа используйте кнопку 💳 Получить доступ."
+                                            ),
+                                            parse_mode="HTML",
+                                            reply_markup=menu
+                                        )
+                                        logger.warning(f"💰 Недостаточность средств для пользователя {telegram_id}, payment_id: {payment_id}")
+                                    else:
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text=(
+                                                "⚠️ <b>Автопродление не удалось</b>\n\n"
+                                                "Не удалось списать средства с вашего способа оплаты.\n"
+                                                "Автопродление автоматически отключено.\n\n"
+                                                "Для продления доступа используйте кнопку 💳 Получить доступ."
+                                            ),
+                                            parse_mode="HTML",
+                                            reply_markup=menu
+                                        )
+                                    
+                                    # Отправляем уведомление об истечении доступа с обновленным меню
+                                    from db import get_subscription_expired_notified, set_subscription_expired_notified
+                                    already_notified_expired = await get_subscription_expired_notified(telegram_id)
+                                    if not already_notified_expired:
+                                        await safe_send_message(
+                                            bot=bot,
+                                            chat_id=telegram_id,
+                                            text="⏰ <b>Ваш доступ истек</b>\n\n"
+                                                "Для продления доступа нажмите кнопку 💳 Получить доступ.",
+                                            parse_mode="HTML",
+                                            reply_markup=menu
+                                        )
+                                        await set_subscription_expired_notified(telegram_id, True)
+                                        logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с обновленным меню")
                                     
                             except Exception as auto_payment_error:
                                 logger.error(f"❌ Ошибка автоматического списания для пользователя {telegram_id}: {auto_payment_error}")
@@ -1395,13 +1727,14 @@ async def check_expired_subscriptions():
                                     # Автопродление успешно - пользователь остается в канале
                                     logger.info(f"✅ Автопродление успешно для пользователя {telegram_id}, пользователь остается в канале")
                         
-                        # Если автоплатеж не удался, отправляем специальное сообщение (только один раз)
+                        # ПРИМЕЧАНИЕ: Уведомления о неудачном автопродлении уже отправлены выше в блоке обработки неудачного платежа
+                        # Этот блок оставляем для совместимости, но проверяем, не было ли уже отправлено уведомление
                         if auto_payment_failed:
-                            # Проверяем, не отправляли ли мы уже уведомление (чтобы не спамить)
+                            # Проверяем, не было ли уже отправлено уведомление в блоке обработки неудачного платежа
+                            # (там уже отправляются все необходимые сообщения с проверкой недостаточности средств)
                             notification_sent_key = f"auto_payment_failed_notification_{telegram_id}"
-                            notification_sent_time = processed_users.get(notification_sent_key)
-                            if not notification_sent_time or (datetime.utcnow() - notification_sent_time).total_seconds() > 300:
-                                # Используем стандартное меню вместо кастомной кнопки
+                            if notification_sent_key not in processed_users:
+                                # Если уведомление еще не отправлено, отправляем (для случаев обработки исключений)
                                 menu = await get_main_menu_for_user(telegram_id)
                                 
                                 await safe_send_message(
@@ -1415,12 +1748,12 @@ async def check_expired_subscriptions():
                                     parse_mode="HTML",
                                     reply_markup=menu
                                 )
-                                processed_users[notification_sent_key] = datetime.utcnow()
-                                logger.info(f"📧 Отправлено уведомление об отключении автопродления пользователю {telegram_id}")
+                                processed_users[notification_sent_key] = datetime.now(timezone.utc)
+                                logger.info(f"📧 Отправлено уведомление об отключении автопродления пользователю {telegram_id} (из блока обработки исключений)")
                         # Отправляем уведомление об истечении доступа ТОЛЬКО если:
                         # 1. Автопродление НЕ было успешным (auto_payment_succeeded = False)
-                        # 2. Автопродление отключено или не работает
-                        # 3. Автоплатеж не удался (auto_payment_failed = True)
+                        # 2. Автопродление отключено или не работает, ИЛИ автоплатеж не удался
+                        # ПРИМЕЧАНИЕ: Если auto_payment_failed = True, уведомление уже было отправлено выше
                         if not auto_payment_succeeded and not auto_payment_failed and (not auto_renewal_enabled or not saved_payment_method_id):
                             # Отправляем уведомление об истечении доступа (только один раз, больше никогда)
                             # Проверяем в БД, было ли уже отправлено уведомление
@@ -1430,25 +1763,37 @@ async def check_expired_subscriptions():
                         
                             # Отправляем уведомление только если еще не отправляли
                             if not already_notified:
+                                # ВАЖНО: Очищаем кэш и получаем актуальное меню (продакшн режим)
+                                from db import _clear_cache
+                                _clear_cache()
+                                menu = await get_main_menu_for_user(telegram_id)
+                                
                                 await safe_send_message(
                                     bot=bot,
                                     chat_id=telegram_id,
                                     text="⏰ <b>Ваш доступ истек</b>\n\n"
                                         "Для продления доступа нажмите кнопку 💳 Получить доступ.",
-                                    parse_mode="HTML"
+                                    parse_mode="HTML",
+                                    reply_markup=menu
                                 )
                                 # Помечаем в БД, что уведомление отправлено (навсегда)
                                 await set_subscription_expired_notified(telegram_id, True)
-                                logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} (один раз, сохранено в БД)")
+                                logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с обновленным меню (один раз, сохранено в БД)")
+                                
+                                # КРИТИЧНО: Добавляем пользователя в processed_users НАВСЕГДА после отправки уведомления
+                                # Это предотвращает повторную обработку пользователя и возможные нежелательные действия
+                                processed_users[telegram_id] = datetime.now(timezone.utc)
+                                logger.info(f"✅ Пользователь {telegram_id} добавлен в processed_users после отправки уведомления об истечении (защита от повторной обработки)")
                             else:
                                 logger.info(f"⏭️ Уведомление об истечении доступа уже было отправлено пользователю {telegram_id}, пропускаем")
+                                # Даже если уведомление уже было отправлено, добавляем в processed_users чтобы не обрабатывать повторно
+                                processed_users[telegram_id] = datetime.now(timezone.utc)
                         else:
                             # Автопродление успешно - не отправляем уведомление об истечении
                             logger.info(f"✅ Автопродление успешно для пользователя {telegram_id}, уведомление об истечении не отправляется")
-                        
-                        # Добавляем пользователя в processed_users с текущим временем
-                        processed_users[telegram_id] = datetime.utcnow()
-                        logger.info(f"✅ Пользователь {telegram_id} добавлен в processed_users")
+                            # Добавляем пользователя в processed_users с текущим временем
+                            processed_users[telegram_id] = datetime.now(timezone.utc)
+                            logger.info(f"✅ Пользователь {telegram_id} добавлен в processed_users")
                         
                 except Exception as e:
                     logger.error(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
@@ -1510,6 +1855,8 @@ async def yookassa_webhook(request: Request):
     if event == "payment.canceled":
         logger.info(f"🔄 Обработка canceled платежа: {payment_id}")
         try:
+            # Убеждаемся, что timezone импортирован
+            from datetime import timezone
             payment = Payment.find_one(payment_id)
             meta = payment.metadata or {}
             tg_user_id = meta.get("telegram_user_id")
@@ -1766,11 +2113,92 @@ async def yookassa_webhook(request: Request):
                     logger.info(f"🔄 Обнаружен отмененный автоплатеж {payment_id} для пользователя {tg_user_id}")
                     
                     # Автоматически отключаем автопродление при отказе
-                    from db import set_auto_renewal, is_auto_renewal_enabled
+                    from db import set_auto_renewal, is_auto_renewal_enabled, _clear_cache
                     auto_renewal_was_enabled = await is_auto_renewal_enabled(tg_user_id)
                     if auto_renewal_was_enabled:
                         await set_auto_renewal(tg_user_id, False)
+                        _clear_cache()
                         logger.info(f"🔄 Автопродление автоматически отключено для пользователя {tg_user_id} из-за отказа автоплатежа")
+                        
+                        # Проверяем, была ли это недостаточность средств
+                        insufficient_funds_detected = False
+                        if cancellation_details_final:
+                            reason_check = ""
+                            if isinstance(cancellation_details_final, dict):
+                                reason_check = str(cancellation_details_final.get('reason', '')).lower()
+                            else:
+                                reason_check = str(getattr(cancellation_details_final, 'reason', '')).lower()
+                            
+                            if any(keyword in reason_check for keyword in ['insufficient', 'funds', 'недостаточно', 'money', 'balance']):
+                                insufficient_funds_detected = True
+                        
+                        # Отзываем ссылку пользователя
+                        from db import get_invite_link
+                        user_invite_link = await get_invite_link(tg_user_id)
+                        if user_invite_link:
+                            await revoke_invite_link(user_invite_link)
+                            logger.info(f"✅ Ссылка пользователя {tg_user_id} отозвана из-за неудачного автопродления")
+                        
+                        # Баним пользователя в канале
+                        try:
+                            await bot.ban_chat_member(
+                                chat_id=CHANNEL_ID,
+                                user_id=tg_user_id,
+                                until_date=None  # Бан навсегда
+                            )
+                            logger.info(f"✅ Пользователь {tg_user_id} забанен в канале из-за неудачного автопродления")
+                        except Exception as ban_error:
+                            logger.warning(f"⚠️ Ошибка бана пользователя {tg_user_id}: {ban_error}")
+                        
+                        # Обновляем меню и отправляем сообщения
+                        menu = await get_main_menu_for_user(tg_user_id)
+                        
+                        # Отправляем сообщение о недостаточности средств (если это причина) или об общей ошибке
+                        if insufficient_funds_detected:
+                            await safe_send_message(
+                                bot=bot,
+                                chat_id=tg_user_id,
+                                text=(
+                                    "⚠️ <b>У вас недостаточно средств</b>\n\n"
+                                    "На вашей карте недостаточно средств для автопродления подписки.\n"
+                                    "Автопродление и доступ будут закрыты.\n\n"
+                                    "Для возобновления доступа используйте кнопку 💳 Получить доступ."
+                                ),
+                                parse_mode="HTML",
+                                reply_markup=menu
+                            )
+                            logger.warning(f"💰 Недостаточность средств для пользователя {tg_user_id}, payment_id: {payment_id}")
+                        else:
+                            await safe_send_message(
+                                bot=bot,
+                                chat_id=tg_user_id,
+                                text=(
+                                    "⚠️ <b>Автопродление не удалось</b>\n\n"
+                                    "Не удалось списать средства с вашего способа оплаты.\n"
+                                    "Автопродление автоматически отключено.\n\n"
+                                    "Для продления доступа используйте кнопку 💳 Получить доступ."
+                                ),
+                                parse_mode="HTML",
+                                reply_markup=menu
+                            )
+                        
+                        # Отправляем уведомление об истечении доступа с обновленным меню
+                        from db import get_subscription_expired_notified, set_subscription_expired_notified
+                        already_notified_expired = await get_subscription_expired_notified(tg_user_id)
+                        if not already_notified_expired:
+                            await safe_send_message(
+                                bot=bot,
+                                chat_id=tg_user_id,
+                                text="⏰ <b>Ваш доступ истек</b>\n\n"
+                                    "Для продления доступа нажмите кнопку 💳 Получить доступ.",
+                                parse_mode="HTML",
+                                reply_markup=menu
+                            )
+                            await set_subscription_expired_notified(tg_user_id, True)
+                            logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {tg_user_id} с обновленным меню")
+                        
+                        # Возвращаем успешный ответ, так как обработка завершена
+                        return {"ok": True, "event": "payment.canceled", "auto_renewal_handled": True}
                 
                 if has_active:
                     # Если доступ активен - не отправляем уведомление об отмене старого платежа
@@ -2308,9 +2736,9 @@ async def yookassa_webhook(request: Request):
             link_expire_date = subscription_expires_at
         else:
             if is_bonus_week_active():
-                link_expire_date = datetime.utcnow() + timedelta(days=subscription_duration)
+                link_expire_date = datetime.now(timezone.utc) + timedelta(days=subscription_duration)
             else:
-                link_expire_date = datetime.utcnow() + timedelta(days=SUBSCRIPTION_DAYS)
+                link_expire_date = datetime.now(timezone.utc) + timedelta(days=SUBSCRIPTION_DAYS)
         
         # КРИТИЧЕСКИ ВАЖНО: Ссылка должна быть УНИКАЛЬНОЙ для каждого пользователя
         # Срок действия ссылки = срок доступа пользователя (expires_at подписки)
@@ -2666,7 +3094,7 @@ async def yookassa_webhook(request: Request):
             starts_str = format_datetime_moscow(starts_at_dt)
             expires_str = format_datetime_moscow(expires_at_dt)
         else:
-            starts_at_dt = datetime.utcnow()
+            starts_at_dt = datetime.now(timezone.utc)
             if is_bonus_week_active():
                 expires_at_dt = starts_at_dt + timedelta(days=subscription_duration)
             else:

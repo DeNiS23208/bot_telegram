@@ -8,6 +8,10 @@ echo "🗑️ Очистка базы данных..."
 python3 clear_db.py --full --yes
 
 echo ""
+echo "🔄 Сброс бонусной недели..."
+python3 reset_bonus_week.py
+
+echo ""
 echo "Поиск запущенных процессов..."
 
 # Ищем процесс бота
@@ -27,15 +31,16 @@ if [ ! -z "$WEBHOOK_PID" ]; then
 fi
 
 echo ""
-echo "Проверяем systemd сервисы..."
+echo "🔄 Перезапуск systemd сервисов..."
 
-# Проверяем какие сервисы есть
-systemctl list-units --type=service | grep -E "(bot|webhook|telegram)" || echo "Сервисы не найдены"
+# Перезапускаем systemd сервисы
+systemctl restart telegram-bot webhook
+
+sleep 3
 
 echo ""
-echo "Если сервисы не найдены, запустите вручную:"
-echo "1. Для бота: cd /opt/bot_telegram && source venv/bin/activate && python3 bot.py &"
-echo "2. Для webhook: cd /opt/bot_telegram && source venv/bin/activate && uvicorn webhook_app:app --host 0.0.0.0 --port 8000 &"
+echo "✅ Проверка статуса сервисов..."
+systemctl status telegram-bot webhook --no-pager | head -20
 
-
-
+echo ""
+echo "✅ Готово! База данных очищена, сервисы перезапущены."

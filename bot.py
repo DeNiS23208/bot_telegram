@@ -2,7 +2,8 @@ import asyncio
 import os
 import inspect
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
@@ -70,6 +71,15 @@ def format_subscription_duration(days: float) -> str:
         else:
             return f"{days_int} дней"
 
+
+def ensure_timezone_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Приводит datetime к timezone-aware (UTC), если он timezone-naive"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -105,7 +115,7 @@ BTN_CHECK_1 = "🔍 Проверить оплату"
 BTN_SUPPORT = "💬 Поддержка"
 
 # Кнопки для бонусной недели
-BTN_BONUS_WEEK = "🎁 Бонус в честь запуск канала Наиля Хасанова"
+BTN_BONUS_WEEK = "🎁 Бонус в честь запуска канала Наиля Хасанова"
 BTN_BACK_TO_MENU = "◀️ Назад в меню"
 BTN_DISABLE_AUTO_RENEWAL = "❌ Отказаться от автопродления"
 BTN_REMOVE_CARD = "💳 Отвязать карту"
@@ -131,8 +141,7 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
         from datetime import timezone
         now = datetime.now(timezone.utc)
         # Убеждаемся, что expires_at имеет timezone для сравнения
-        if expires_at and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = ensure_timezone_aware(expires_at)
         has_active_subscription = expires_at and expires_at > now
         
         # Проверяем, включено ли автопродление
@@ -625,8 +634,9 @@ async def sub_status(message: Message):
         )
         return
 
-    now = datetime.utcnow()
-    if expires_at > now:
+    now = datetime.now(timezone.utc)
+    expires_at = ensure_timezone_aware(expires_at)
+    if expires_at and expires_at > now:
         starts_at = await get_subscription_starts_at(message.from_user.id)
         if starts_at:
             starts_str = format_datetime_moscow(starts_at)
@@ -818,8 +828,7 @@ async def back_to_bonus_menu_callback(callback: CallbackQuery):
         from datetime import timezone
         expires_at = await get_subscription_expires_at(user_id)
         now = datetime.now(timezone.utc)
-        if expires_at and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = ensure_timezone_aware(expires_at)
         has_active = expires_at and expires_at > now
         
         if has_active:
@@ -872,7 +881,9 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
     # Проверяем активную подписку
     expires_at = await get_subscription_expires_at(message.from_user.id)
     
-    if expires_at and expires_at > datetime.utcnow():
+    now = datetime.now(timezone.utc)
+    expires_at = ensure_timezone_aware(expires_at)
+    if expires_at and expires_at > now:
         # У пользователя уже есть активная подписка
         starts_at = await get_subscription_starts_at(message.from_user.id)
         starts_str = format_datetime_moscow(starts_at) if starts_at else "неизвестно"
@@ -996,7 +1007,9 @@ async def pay(message: Message):
     # ПЕРВЫМ ДЕЛОМ проверяем активную подписку
     expires_at = await get_subscription_expires_at(message.from_user.id)
     
-    if expires_at and expires_at > datetime.utcnow():
+    now = datetime.now(timezone.utc)
+    expires_at = ensure_timezone_aware(expires_at)
+    if expires_at and expires_at > now:
         starts_at = await get_subscription_starts_at(message.from_user.id)
         starts_str = format_datetime_moscow(starts_at) if starts_at else "неизвестно"
         expires_str = format_datetime_moscow(expires_at)
@@ -1236,7 +1249,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
                 InlineKeyboardButton(
-                    text="не навигация",
+                    text="Навигация",
                     url=mini_app_url  # Используем url вместо web_app
                 )
             ]]
@@ -1245,7 +1258,7 @@ async def cmd_send_miniapp_to_channel(message: Message):
         # Отправляем сообщение с кнопкой в канал
         sent_message = await bot.send_message(
             chat_id=CHANNEL_ID,
-            text="НАИЛЬ САМЫЙ УСПЕШНЫЙ ЧЕЛОВЕК В МИРЕ",
+            text="🔥",
             reply_markup=keyboard
         )
         
@@ -1397,8 +1410,7 @@ async def back_to_main_menu(message: Message):
         from datetime import timezone
         expires_at = await get_subscription_expires_at(user_id)
         now = datetime.now(timezone.utc)
-        if expires_at and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = ensure_timezone_aware(expires_at)
         has_active = expires_at and expires_at > now
         
         if has_active:
@@ -1447,7 +1459,7 @@ async def disable_auto_renewal_bonus_week(message: Message):
         return
     
     expires_at = await get_subscription_expires_at(user_id)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     if not expires_at or expires_at <= now:
         await message.answer(
@@ -1526,8 +1538,7 @@ async def cancel_subscription(message: Message):
     now = datetime.now(timezone.utc)
     
     # Убеждаемся, что expires_at имеет timezone для сравнения
-    if expires_at and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    expires_at = ensure_timezone_aware(expires_at)
     
     if not expires_at or expires_at <= now:
         await message.answer(
@@ -1592,7 +1603,9 @@ async def resume_subscription(message: Message):
     
     # Проверяем, есть ли активная подписка
     expires_at = await get_subscription_expires_at(user_id)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
     
     if not expires_at or expires_at <= now:
         await message.answer(
@@ -1752,10 +1765,9 @@ async def approve_join_request(join_request: ChatJoinRequest):
             now = datetime.now(timezone.utc)
             
             # Убеждаемся, что expires_at имеет timezone для сравнения
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            expires_at = ensure_timezone_aware(expires_at)
             
-            has_active_subscription = expires_at > now
+            has_active_subscription = expires_at and expires_at > now
             
             if has_active_subscription:
                 # У пользователя есть активная подписка - одобряем заявку
@@ -1806,7 +1818,7 @@ async def on_chat_member_update(update: ChatMemberUpdated):
         from db import get_subscription_expires_at
         expires_at = await get_subscription_expires_at(user_id)
         from datetime import datetime
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         has_active_subscription = expires_at and expires_at > now
         
         if not has_active_subscription:
