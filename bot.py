@@ -161,9 +161,25 @@ async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     # 1. Бонусная неделя активна
     # 2. У пользователя НЕТ активной подписки с автопродлением (show_manage_button = False)
     # Если у пользователя есть активная подписка с автопродлением - ВСЕГДА показываем продакшн меню
-    if is_bonus_week_active() and not show_manage_button:
-        # Бонусная неделя активна, но у пользователя нет активной подписки - показываем бонусное меню
-        return await bonus_week_menu()
+    # Если бонусная неделя закончилась - ВСЕГДА показываем продакшн меню
+    bonus_week_active = is_bonus_week_active()
+    if bonus_week_active:
+        if show_manage_button:
+            # У пользователя есть активная подписка с автопродлением - показываем продакшн меню
+            pass  # Продолжаем выполнение, чтобы показать продакшн меню
+        elif has_active_subscription and not auto_renewal_enabled:
+            # КРИТИЧЕСКИ ВАЖНО: Если в бонусной неделе у пользователя есть активная подписка,
+            # но автопродление отключено - показываем ТОЛЬКО "О проекте"
+            keyboard = [
+                [KeyboardButton(text=BTN_ABOUT_1)],
+            ]
+            return ReplyKeyboardMarkup(
+                keyboard=keyboard,
+                resize_keyboard=True,
+            )
+        else:
+            # У пользователя нет активной подписки - показываем бонусное меню
+            return await bonus_week_menu()
     
     # Если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
     payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
