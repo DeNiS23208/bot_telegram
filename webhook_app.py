@@ -310,7 +310,7 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     # 2. У пользователя НЕТ активной подписки (или автопродление отключено)
     # Если бонусная неделя закончилась - ВСЕГДА показываем продакшн меню
     bonus_week_active = is_bonus_week_active()
-    if bonus_week_active and not show_manage_button:
+    if bonus_week_active:
         if show_manage_button:
             # У пользователя есть активная подписка - показываем "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
