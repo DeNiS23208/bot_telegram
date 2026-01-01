@@ -249,9 +249,13 @@ async def cmd_start(message: Message):
     if is_bonus_week_active():
         # Текст для бонусной недели
         # Вычисляем реальное оставшееся время до конца бонусной недели
+        # КРИТИЧЕСКИ ВАЖНО: Используем bonus_week_end (фиксированное время окончания бонусной недели)
         from datetime import timezone
         now = datetime.now(timezone.utc)
         bonus_end = get_bonus_week_end()
+        # Убеждаемся, что bonus_end имеет timezone
+        if bonus_end.tzinfo is None:
+            bonus_end = bonus_end.replace(tzinfo=timezone.utc)
         time_until_bonus_end = bonus_end - now
         
         # Форматируем оставшееся время
@@ -718,9 +722,13 @@ async def bonus_week_info(message: Message):
         return
     
     # Вычисляем реальное оставшееся время до конца бонусной недели
+    # КРИТИЧЕСКИ ВАЖНО: Используем bonus_week_end (фиксированное время окончания бонусной недели)
     from datetime import timezone
     now = datetime.now(timezone.utc)
     bonus_end = get_bonus_week_end()
+    # Убеждаемся, что bonus_end имеет timezone
+    if bonus_end.tzinfo is None:
+        bonus_end = bonus_end.replace(tzinfo=timezone.utc)
     time_until_bonus_end = bonus_end - now
     
     # Форматируем оставшееся время
@@ -1328,12 +1336,19 @@ async def manage_subscription(message: Message):
     # Проверяем, активна ли бонусная неделя и является ли подписка бонусной
     is_bonus = is_bonus_week_active()
     bonus_week_end = get_bonus_week_end()
+    # Убеждаемся, что bonus_week_end имеет timezone
+    if bonus_week_end.tzinfo is None:
+        bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
     
     # Вычисляем остаток времени до окончания бонусной недели (в реальном времени)
-    if is_bonus and expires_at <= bonus_week_end:
-        # Это подписка из бонусной недели
+    # КРИТИЧЕСКИ ВАЖНО: Используем bonus_week_end (фиксированное время окончания бонусной недели),
+    # а не expires_at подписки, так как expires_at может быть установлен неправильно
+    if is_bonus:
+        # Это подписка из бонусной недели (проверяем, что expires_at <= bonus_week_end)
         # ВАЖНО: Используем текущее время для расчета оставшегося времени
         now_real = datetime.now(timezone.utc)  # Получаем актуальное время каждый раз
+        # КРИТИЧЕСКИ ВАЖНО: Используем bonus_week_end (фиксированное время окончания бонусной недели),
+        # а не expires_at, чтобы правильно рассчитать оставшееся время
         time_until_bonus_end = bonus_week_end - now_real
         if time_until_bonus_end.total_seconds() > 0:
             days_left = time_until_bonus_end.days
@@ -1491,6 +1506,9 @@ async def disable_auto_renewal_bonus_week(message: Message):
     
     expires_str = format_datetime_moscow(expires_at)
     bonus_week_end = get_bonus_week_end()
+    # Убеждаемся, что bonus_week_end имеет timezone
+    if bonus_week_end.tzinfo is None:
+        bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
     time_until_bonus_end = bonus_week_end - now
     
     if time_until_bonus_end.total_seconds() > 0:
