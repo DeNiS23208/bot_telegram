@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram Bot Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bot_telegram
+Environment="PATH=/opt/bot_telegram/venv/bin:/usr/bin:/usr/local/bin:/root/.local/bin"
+ExecStart=/opt/bot_telegram/venv/bin/python3 /opt/bot_telegram/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
