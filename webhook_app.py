@@ -1170,10 +1170,9 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                    continue
-                    else:
-                        # НЕ удаляем из processed_users автоматически - пусть остается до очистки выше
-                        logger.info(f"🔄 Пользователь {telegram_id} был обработан {time_since_processed:.0f} секунд назад, продолжаем обработку")
+                        continue
+                    # НЕ удаляем из processed_users автоматически - пусть остается до очистки выше
+                    logger.info(f"🔄 Пользователь {telegram_id} был обработан {time_since_processed:.0f} секунд назад, продолжаем обработку")
                     
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
@@ -1317,8 +1316,8 @@ async def check_expired_subscriptions():
                                 from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
-                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                        
+                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                                
                                 # Определяем цену и длительность для автопродления
                                 # КРИТИЧЕСКИ ВАЖНО: Автопродление для бонусных подписок должно срабатывать ТОЛЬКО при окончании бонусной недели
                                 # Если бонусная неделя еще активна и это бонусная подписка, НЕ делаем автопродление - ждем окончания бонусной недели
@@ -2831,7 +2830,7 @@ async def yookassa_webhook(request: Request):
         except Exception as final_error:
             logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать уникальную ссылку даже в последней попытке: {final_error}")
             # Отправляем сообщение об ошибке, но НЕ прерываем обработку платежа
-        menu = await get_main_menu_for_user(tg_user_id)
+            menu = await get_main_menu_for_user(tg_user_id)
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,

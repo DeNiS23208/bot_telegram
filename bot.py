@@ -1437,9 +1437,9 @@ async def back_to_main_menu(message: Message):
                 [KeyboardButton(text=BTN_ABOUT_1)],
             ]
             menu = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-    await message.answer(
-        "📋 <b>Главное меню</b>",
-        parse_mode="HTML",
+            await message.answer(
+                "📋 <b>Главное меню</b>",
+                parse_mode="HTML",
                 reply_markup=menu
             )
         else:
@@ -1785,14 +1785,14 @@ async def approve_join_request(join_request: ChatJoinRequest):
             
             if has_active_subscription:
                 # У пользователя есть активная подписка - одобряем заявку
-            try:
-                await join_request.approve()
+                try:
+                    await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от пользователя {user_id} (активная подписка до {expires_at})")
-            except Exception as e:
-                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+                except Exception as e:
+                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
                     import traceback
                     traceback.print_exc()
-        else:
+            else:
                 # Подписка истекла - отклоняем заявку
                 try:
                     await join_request.decline()
