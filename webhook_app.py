@@ -2929,8 +2929,19 @@ async def yookassa_webhook(request: Request):
                 logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Подписка НЕ найдена в БД для пользователя {tg_user_id} (тип платежа: {payment_type_name})!")
         
         # ПРИНУДИТЕЛЬНО создаем правильное меню в зависимости от режима
-        # ВАЖНО: Это работает для ВСЕХ типов платежей одинаково
-        if is_bonus_week_active():
+        # ВАЖНО: Это работает для ВСЕХ типов платежей одинаково (СБП, SberPay, банковская карта)
+        # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Проверяем, не закончилась ли бонусная неделя по времени окончания
+        bonus_week_active_check = is_bonus_week_active()
+        from config import get_bonus_week_end
+        bonus_week_end_check = get_bonus_week_end()
+        if bonus_week_end_check.tzinfo is None:
+            bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
+        now_check_menu = datetime.now(timezone.utc)
+        # Если текущее время больше времени окончания бонусной недели - бонусная неделя закончилась
+        if now_check_menu > bonus_week_end_check:
+            bonus_week_active_check = False  # Принудительно устанавливаем, что бонусная неделя закончилась
+        
+        if bonus_week_active_check:
             # БОНУСНАЯ НЕДЕЛЯ: После успешной оплаты ВСЕГДА показываем "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
             BTN_ABOUT_1 = "ℹ️ О проекте"
@@ -2966,7 +2977,8 @@ async def yookassa_webhook(request: Request):
         
         # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
         # КРИТИЧЕСКИ ВАЖНО: Для бонусной недели вычисляем длительность в минутах
-        if is_bonus_week_active() and starts_at_dt and expires_at_dt:
+        # Используем ту же проверку, что и для меню (bonus_week_active_check)
+        if bonus_week_active_check and starts_at_dt and expires_at_dt:
             # Вычисляем разницу в минутах для бонусной недели
             time_diff = expires_at_dt - starts_at_dt
             minutes_diff = int(time_diff.total_seconds() / 60)
