@@ -309,7 +309,16 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     # 1. Бонусная неделя активна (is_bonus_week_active() = True)
     # 2. У пользователя НЕТ активной подписки с автопродлением (show_manage_button = False)
     # Если бонусная неделя закончилась - ВСЕГДА показываем продакшн меню, независимо от статуса автопродления
+    # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Проверяем, не закончилась ли бонусная неделя по времени окончания
     bonus_week_active = is_bonus_week_active()
+    from config import get_bonus_week_end
+    bonus_week_end = get_bonus_week_end()
+    if bonus_week_end.tzinfo is None:
+        bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+    # Если текущее время больше времени окончания бонусной недели - бонусная неделя закончилась
+    if now > bonus_week_end:
+        bonus_week_active = False  # Принудительно устанавливаем, что бонусная неделя закончилась
+    
     if bonus_week_active:
         if show_manage_button:
             # У пользователя есть активная подписка с автопродлением - показываем "Управление доступом"
