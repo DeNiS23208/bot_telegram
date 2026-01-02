@@ -802,7 +802,6 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     text=(
                         "⚠️ <b>У вас недостаточно средств</b>\n\n"
                         "На вашей карте недостаточно средств для автопродления подписки.\n"
-                        f"Попытка {attempt_number} из 3 не удалась.\n"
                         "Пожалуйста пополните баланс для успешного автопродления"
                     ),
                     parse_mode="HTML"
@@ -813,8 +812,7 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     chat_id=telegram_id,
                     text=(
                         "⚠️ <b>Автопродление не удалось</b>\n\n"
-                        "Не удалось списать средства с вашего способа оплаты.\n"
-                        f"Попытка {attempt_number} из 3 не удалась."
+                        "Не удалось списать средства с вашего способа оплаты."
                     ),
                     parse_mode="HTML"
                 )
@@ -949,10 +947,21 @@ async def check_bonus_week_transition_to_production():
                         # Первая попытка: сразу после окончания бонусной недели
                         should_attempt = True
                         attempt_number = 1
-                    elif last_attempt_at and attempts > 0 and attempts < 3:
+                    elif attempts > 0 and attempts < 3:
                         # Проверяем, прошло ли 2 минуты с последней попытки
-                        time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
-                        if 2 <= time_since_last_attempt <= 5:  # С погрешностью ±3 минуты
+                        if last_attempt_at:
+                            try:
+                                time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
+                                if 2 <= time_since_last_attempt <= 5:  # С погрешностью ±3 минуты
+                                    should_attempt = True
+                                    attempt_number = attempts + 1
+                            except Exception as time_error:
+                                logger.warning(f"⚠️ Ошибка вычисления времени с последней попытки для пользователя {telegram_id}: {time_error}")
+                                # Если ошибка, все равно пытаемся выполнить попытку, если прошло достаточно времени
+                                should_attempt = True
+                                attempt_number = attempts + 1
+                        else:
+                            # Если last_attempt_at нет, но есть попытки - выполняем следующую попытку
                             should_attempt = True
                             attempt_number = attempts + 1
                     
