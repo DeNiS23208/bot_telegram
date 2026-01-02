@@ -972,10 +972,13 @@ async def check_bonus_week_transition_to_production():
                         # Выполняем попытку автопродления
                         success = await attempt_auto_renewal(telegram_id, saved_payment_method_id, auto_amount, auto_duration, attempt_number)
                         
+                        # Получаем актуальное количество попыток после attempt_auto_renewal
+                        attempts_after = await get_auto_renewal_attempts(telegram_id)
+                        
                         if success:
                             # Успешно - меню уже обновлено в attempt_auto_renewal
                             logger.info(f"✅ Автопродление успешно для пользователя {telegram_id}, попытка {attempt_number}")
-                        elif attempts + 1 >= 3:
+                        elif attempts_after >= 3:
                             # Все 3 попытки неудачны - бан и меню с "Оплатить доступ"
                             from db import set_auto_renewal, get_invite_link
                             from telegram_utils import revoke_invite_link
