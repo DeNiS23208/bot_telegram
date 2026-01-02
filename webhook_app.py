@@ -347,7 +347,19 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
             logger.info(f"🔍 Бонусная неделя активна: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}")
     
     if bonus_week_active:
-        if show_manage_button:
+        # КРИТИЧЕСКИ ВАЖНО: Во время попыток автопродления (auto_renewal_in_progress) 
+        # показываем ТОЛЬКО "О проекте", чтобы меню не менялось
+        if auto_renewal_in_progress:
+            # Идут попытки автопродления - показываем только "О проекте", меню не меняется
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            keyboard = [
+                [KeyboardButton(text=BTN_ABOUT_1)],
+            ]
+            return ReplyKeyboardMarkup(
+                keyboard=keyboard,
+                resize_keyboard=True,
+            )
+        elif show_manage_button:
             # У пользователя есть активная подписка с автопродлением - показываем "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
             BTN_ABOUT_1 = "ℹ️ О проекте"
