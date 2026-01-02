@@ -373,7 +373,7 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     BTN_SUPPORT = "💬 Поддержка"
     
     # Проверяем наличие активной подписки
-    from db import get_subscription_expires_at, is_auto_renewal_enabled
+    from db import get_subscription_expires_at, is_auto_renewal_enabled, get_auto_renewal_attempts
     expires_at = await get_subscription_expires_at(telegram_id)
     now = datetime.now(timezone.utc)
     # Убеждаемся, что expires_at имеет timezone для сравнения
@@ -382,8 +382,16 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     has_active_subscription = expires_at and expires_at > now
     
     # Проверяем, включено ли автопродление
-    # Если автопродление отключено, показываем "Получить доступ" даже при активной подписке
     auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
+    
+    # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено после 3 неудачных попыток,
+    # считаем подписку неактивной для отображения меню, даже если expires_at > now
+    attempts = await get_auto_renewal_attempts(telegram_id)
+    if not auto_renewal_enabled and attempts >= 3:
+        # Все 3 попытки неудачны - показываем меню с "Получить доступ", даже если подписка еще не истекла
+        has_active_subscription = False
+        logger.info(f"🔍 Пользователь {telegram_id}: 3 неудачные попытки, автопродление отключено - показываем меню 'Получить доступ'")
+    
     # Показываем "Управление доступом" только если подписка активна И автопродление включено
     show_manage_button = has_active_subscription and auto_renewal_enabled
     
