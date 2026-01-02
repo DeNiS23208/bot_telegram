@@ -286,7 +286,7 @@ async def cmd_start(message: Message):
             bonus_end = bonus_end.replace(tzinfo=timezone.utc)
         time_until_bonus_end = bonus_end - now
         
-        # Форматируем оставшееся время
+        # Форматируем оставшееся время (показываем и часы, и минуты)
         if time_until_bonus_end.total_seconds() > 0:
             days_left = time_until_bonus_end.days
             hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
@@ -295,7 +295,13 @@ async def cmd_start(message: Message):
             if days_left > 0:
                 time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
             elif hours_left > 0:
-                time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+                # Показываем часы и минуты
+                hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+                if minutes_left > 0:
+                    minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                    time_left_text = f"{hours_text} {minutes_text}"
+                else:
+                    time_left_text = hours_text
             else:
                 time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
         else:
@@ -759,7 +765,7 @@ async def bonus_week_info(message: Message):
         bonus_end = bonus_end.replace(tzinfo=timezone.utc)
     time_until_bonus_end = bonus_end - now
     
-    # Форматируем оставшееся время
+    # Форматируем оставшееся время (показываем и часы, и минуты)
     if time_until_bonus_end.total_seconds() > 0:
         days_left = time_until_bonus_end.days
         hours_left = int((time_until_bonus_end.total_seconds() % 86400) / 3600)
@@ -768,7 +774,13 @@ async def bonus_week_info(message: Message):
         if days_left > 0:
             time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
         elif hours_left > 0:
-            time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+            # Показываем часы и минуты
+            hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+            if minutes_left > 0:
+                minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                time_left_text = f"{hours_text} {minutes_text}"
+            else:
+                time_left_text = hours_text
         else:
             time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
     else:
@@ -1396,7 +1408,13 @@ async def manage_subscription(message: Message):
             if days_left > 0:
                 time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
             elif hours_left > 0:
-                time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+                # Показываем часы и минуты
+                hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+                if minutes_left > 0:
+                    minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                    time_left_text = f"{hours_text} {minutes_text}"
+                else:
+                    time_left_text = hours_text
             else:
                 time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
             
@@ -1557,7 +1575,13 @@ async def disable_auto_renewal_bonus_week(message: Message):
         if days_left > 0:
             time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
         elif hours_left > 0:
-            time_left_text = f"{hours_left} час{'а' if 2 <= hours_left <= 4 else 'ов'}"
+            # Показываем часы и минуты
+            hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+            if minutes_left > 0:
+                minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                time_left_text = f"{hours_text} {minutes_text}"
+            else:
+                time_left_text = hours_text
         else:
             time_left_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
     else:

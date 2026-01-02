@@ -1031,7 +1031,14 @@ async def check_bonus_week_ending_soon():
                             auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
                             
                             if minutes_until_end >= 60:
-                                time_text = f"{int(minutes_until_end // 60)} час{'а' if 2 <= int(minutes_until_end // 60) <= 4 else 'ов'}"
+                                hours = int(minutes_until_end // 60)
+                                minutes = int(minutes_until_end % 60)
+                                hours_text = f"{hours} час" if hours == 1 else (f"{hours} часа" if 2 <= hours <= 4 else f"{hours} часов")
+                                if minutes > 0:
+                                    minutes_text = f"{minutes} минут{'ы' if 2 <= minutes <= 4 else ''}"
+                                    time_text = f"{hours_text} {minutes_text}"
+                                else:
+                                    time_text = hours_text
                             else:
                                 time_text = f"{int(minutes_until_end)} минут{'ы' if 2 <= int(minutes_until_end) <= 4 else ''}"
                             
