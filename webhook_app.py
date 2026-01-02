@@ -909,9 +909,9 @@ async def check_bonus_week_transition_to_production():
                         should_attempt = True
                         attempt_number = 1
                     elif last_attempt_at and attempts > 0 and attempts < 3:
-                        # Проверяем, прошло ли 5 минут с последней попытки
+                        # Проверяем, прошло ли 2 минуты с последней попытки
                         time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
-                        if 5 <= time_since_last_attempt <= 8:  # С погрешностью ±3 минуты
+                        if 2 <= time_since_last_attempt <= 5:  # С погрешностью ±3 минуты
                             should_attempt = True
                             attempt_number = attempts + 1
                     
@@ -1124,53 +1124,10 @@ async def check_expired_subscriptions():
             # Проверяем подписки, которые истекли
             expired_subs = await get_expired_subscriptions()
             
-            # КРИТИЧЕСКАЯ ПРОВЕРКА: Также проверяем активные подписки из бонусной недели, если бонусная неделя закончилась
-            # Это важно для автопродления бонусных подписок при окончании бонусной недели
-            bonus_week_ended_for_check = not is_bonus_week_active()
-            if bonus_week_ended_for_check:
-                from config import get_bonus_week_start, get_bonus_week_end
-                bonus_week_start_check = get_bonus_week_start()
-                bonus_week_end_check = get_bonus_week_end()
-                if bonus_week_start_check.tzinfo is None:
-                    bonus_week_start_check = bonus_week_start_check.replace(tzinfo=timezone.utc)
-                if bonus_week_end_check.tzinfo is None:
-                    bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
-                
-                # Получаем все активные подписки из бонусной недели
-                async with aiosqlite.connect(DB_PATH) as db_bonus:
-                    cursor_bonus = await db_bonus.execute(
-                        """
-                        SELECT s.telegram_id, s.expires_at, s.auto_renewal_enabled, 
-                               s.saved_payment_method_id, s.starts_at
-                        FROM subscriptions s
-                        WHERE s.expires_at > ? AND s.starts_at IS NOT NULL
-                        """,
-                        (datetime.now(timezone.utc).isoformat(),)
-                    )
-                    bonus_active_subs = await cursor_bonus.fetchall()
-                    
-                    # Фильтруем только те, которые были созданы во время бонусной недели
-                    for bonus_row in bonus_active_subs:
-                        bonus_telegram_id = bonus_row[0]
-                        bonus_expires_at_str = bonus_row[1]
-                        bonus_starts_at_str = bonus_row[4] if len(bonus_row) > 4 and bonus_row[4] else None
-                        
-                        is_bonus_sub = False
-                        if bonus_starts_at_str:
-                            try:
-                                bonus_starts_at = datetime.fromisoformat(bonus_starts_at_str)
-                                if bonus_starts_at.tzinfo is None:
-                                    bonus_starts_at = bonus_starts_at.replace(tzinfo=timezone.utc)
-                                is_bonus_sub = bonus_week_start_check <= bonus_starts_at <= bonus_week_end_check
-                            except Exception:
-                                pass
-                        
-                        if is_bonus_sub:
-                            # Добавляем в список для обработки автопродления
-                            expired_subs.append(bonus_row)
-                            logger.info(f"🔍 Добавлена активная бонусная подписка пользователя {bonus_telegram_id} для автопродления (бонусная неделя закончилась)")
+            # ВАЖНО: Бонусные подписки обрабатываются в check_bonus_week_transition_to_production()
+            # Эта функция обрабатывает только обычные истекшие подписки
             
-            logger.info(f"🔍 Проверка подписок для автопродления: найдено {len(expired_subs)} подписок (включая активные бонусные)")
+            logger.info(f"🔍 Проверка подписок для автопродления: найдено {len(expired_subs)} подписок (только истекшие, бонусные обрабатываются отдельно)")
             
             for row in expired_subs:
                 telegram_id = row[0]
@@ -1241,16 +1198,19 @@ async def check_expired_subscriptions():
                         if time_since_bonus_end_check > 0:
                             bonus_week_ended_check = True
                     
+                    # КРИТИЧЕСКАЯ ПРОВЕРКА: Если это бонусная подписка, пропускаем её
+                    # Бонусные подписки обрабатываются ТОЛЬКО в check_bonus_week_transition_to_production()
+                    # Это предотвращает конфликт между двумя системами автопродления
+                    if is_bonus_subscription_check:
+                        logger.info(f"⏭️ Пропуск бонусной подписки пользователя {telegram_id} - обрабатывается в check_bonus_week_transition_to_production()")
+                        continue
+                    
                     # Определяем, нужно ли выполнять автопродление
                     should_do_auto_renewal = False
                     if expires_at <= now:
-                        # Подписка истекла - нужно автопродление
+                        # Подписка истекла - нужно автопродление (только для обычных подписок)
                         should_do_auto_renewal = True
                         logger.info(f"🔍 Подписка пользователя {telegram_id} истекла (expires_at={expires_at}, now={now}) - нужно автопродление")
-                    elif bonus_week_ended_check and is_bonus_subscription_check:
-                        # Бонусная неделя закончилась и это бонусная подписка - нужно автопродление даже если подписка еще не истекла
-                        should_do_auto_renewal = True
-                        logger.info(f"🔍 Бонусная неделя закончилась для пользователя {telegram_id}, подписка еще активна (expires_at={expires_at}, now={now}) - нужно автопродление")
                     
                     if should_do_auto_renewal:
                         auto_payment_failed = False
