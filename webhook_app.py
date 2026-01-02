@@ -883,11 +883,20 @@ async def check_bonus_week_transition_to_production():
                     is_bonus_subscription = False
                     if starts_at:
                         is_bonus_subscription = bonus_week_start <= starts_at <= bonus_week_end
-                    elif expires_at <= bonus_week_end or (expires_at - bonus_week_end).total_seconds() / 60 <= 2:
-                        is_bonus_subscription = True
+                        logger.info(f"🔍 Проверка бонусной подписки для {telegram_id}: starts_at={starts_at.isoformat()}, bonus_week_start={bonus_week_start.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}, is_bonus={is_bonus_subscription}")
+                    elif expires_at:
+                        # Если starts_at нет, проверяем по expires_at
+                        time_diff = (expires_at - bonus_week_end).total_seconds() / 60
+                        is_bonus_subscription = expires_at <= bonus_week_end or (0 <= time_diff <= 2)
+                        logger.info(f"🔍 Проверка бонусной подписки для {telegram_id} (без starts_at): expires_at={expires_at.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}, time_diff={time_diff:.1f} мин, is_bonus={is_bonus_subscription}")
+                    else:
+                        logger.warning(f"⚠️ Нет starts_at и expires_at для пользователя {telegram_id}")
                     
                     if not is_bonus_subscription:
+                        logger.info(f"⏭️ Пропуск пользователя {telegram_id}: не бонусная подписка")
                         continue
+                    
+                    logger.info(f"✅ Пользователь {telegram_id} имеет бонусную подписку, обрабатываем автопродление")
                     
                     # Получаем информацию об автопродлении
                     auto_renewal_enabled = sub_info.get('auto_renewal_enabled', False)
