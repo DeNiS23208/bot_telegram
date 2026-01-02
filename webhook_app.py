@@ -1643,50 +1643,74 @@ async def check_expired_subscriptions():
                                     except Exception as ban_error:
                                         logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
                                     
-                                    # Отправляем сообщение о недостаточности средств (если это причина) или об общей ошибке
-                                    menu = await get_main_menu_for_user(telegram_id)
-                                    if insufficient_funds:
-                                        await safe_send_message(
-                                            bot=bot,
-                                            chat_id=telegram_id,
-                                            text=(
-                                                "⚠️ <b>У вас недостаточно средств</b>\n\n"
-                                                "На вашей карте недостаточно средств для автопродления подписки.\n"
-                                                "Автопродление и доступ будут закрыты.\n\n"
-                                                "Для возобновления доступа используйте кнопку 💳 Получить доступ."
-                                            ),
-                                            parse_mode="HTML",
-                                            reply_markup=menu
-                                        )
-                                        logger.warning(f"💰 Недостаточность средств для пользователя {telegram_id}, payment_id: {payment_id}")
-                                    else:
-                                        await safe_send_message(
-                                            bot=bot,
-                                            chat_id=telegram_id,
-                                            text=(
-                                                "⚠️ <b>Автопродление не удалось</b>\n\n"
-                                                "Не удалось списать средства с вашего способа оплаты.\n"
-                                                "Автопродление автоматически отключено.\n\n"
-                                                "Для продления доступа используйте кнопку 💳 Получить доступ."
-                                            ),
-                                            parse_mode="HTML",
-                                            reply_markup=menu
-                                        )
+                                    # КРИТИЧЕСКИ ВАЖНО: Проверяем, является ли это бонусная подписка
+                                    # Если да, НЕ отправляем эти уведомления - они будут отправлены в check_bonus_week_transition_to_production()
+                                    from config import get_bonus_week_start, get_bonus_week_end
+                                    bonus_week_start_check = get_bonus_week_start()
+                                    bonus_week_end_check = get_bonus_week_end()
+                                    if bonus_week_start_check.tzinfo is None:
+                                        bonus_week_start_check = bonus_week_start_check.replace(tzinfo=timezone.utc)
+                                    if bonus_week_end_check.tzinfo is None:
+                                        bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
                                     
-                                    # Отправляем уведомление об истечении доступа с обновленным меню
-                                    from db import get_subscription_expired_notified, set_subscription_expired_notified
-                                    already_notified_expired = await get_subscription_expired_notified(telegram_id)
-                                    if not already_notified_expired:
-                                        await safe_send_message(
-                                            bot=bot,
-                                            chat_id=telegram_id,
-                                            text="⏰ <b>Ваш доступ истек</b>\n\n"
-                                                "Для продления доступа нажмите кнопку 💳 Получить доступ.",
-                                            parse_mode="HTML",
-                                            reply_markup=menu
-                                        )
-                                        await set_subscription_expired_notified(telegram_id, True)
-                                        logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с обновленным меню")
+                                    is_bonus_subscription_check = False
+                                    if starts_at_str:
+                                        try:
+                                            starts_at_check = datetime.fromisoformat(starts_at_str)
+                                            if starts_at_check.tzinfo is None:
+                                                starts_at_check = starts_at_check.replace(tzinfo=timezone.utc)
+                                            is_bonus_subscription_check = bonus_week_start_check <= starts_at_check <= bonus_week_end_check
+                                        except Exception:
+                                            pass
+                                    
+                                    # Если это бонусная подписка, НЕ отправляем уведомления - они будут отправлены в check_bonus_week_transition_to_production()
+                                    if is_bonus_subscription_check:
+                                        logger.info(f"⏭️ Пропуск уведомлений для бонусной подписки пользователя {telegram_id} - они будут отправлены в check_bonus_week_transition_to_production()")
+                                    else:
+                                        # Отправляем сообщение о недостаточности средств (если это причина) или об общей ошибке
+                                        menu = await get_main_menu_for_user(telegram_id)
+                                        if insufficient_funds:
+                                            await safe_send_message(
+                                                bot=bot,
+                                                chat_id=telegram_id,
+                                                text=(
+                                                    "⚠️ <b>У вас недостаточно средств</b>\n\n"
+                                                    "На вашей карте недостаточно средств для автопродления подписки.\n"
+                                                    "Автопродление и доступ будут закрыты.\n\n"
+                                                    "Для возобновления доступа используйте кнопку 💳 Получить доступ."
+                                                ),
+                                                parse_mode="HTML",
+                                                reply_markup=menu
+                                            )
+                                            logger.warning(f"💰 Недостаточность средств для пользователя {telegram_id}, payment_id: {payment_id}")
+                                        else:
+                                            await safe_send_message(
+                                                bot=bot,
+                                                chat_id=telegram_id,
+                                                text=(
+                                                    "⚠️ <b>Автопродление не удалось</b>\n\n"
+                                                    "Не удалось списать средства с вашего способа оплаты.\n"
+                                                    "Автопродление автоматически отключено.\n\n"
+                                                    "Для продления доступа используйте кнопку 💳 Получить доступ."
+                                                ),
+                                                parse_mode="HTML",
+                                                reply_markup=menu
+                                            )
+                                        
+                                        # Отправляем уведомление об истечении доступа с обновленным меню
+                                        from db import get_subscription_expired_notified, set_subscription_expired_notified
+                                        already_notified_expired = await get_subscription_expired_notified(telegram_id)
+                                        if not already_notified_expired:
+                                            await safe_send_message(
+                                                bot=bot,
+                                                chat_id=telegram_id,
+                                                text="⏰ <b>Ваш доступ истек</b>\n\n"
+                                                    "Для продления доступа нажмите кнопку 💳 Получить доступ.",
+                                                parse_mode="HTML",
+                                                reply_markup=menu
+                                            )
+                                            await set_subscription_expired_notified(telegram_id, True)
+                                            logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с обновленным меню")
                                     
                             except Exception as auto_payment_error:
                                 logger.error(f"❌ Ошибка автоматического списания для пользователя {telegram_id}: {auto_payment_error}")
