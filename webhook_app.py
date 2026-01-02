@@ -2147,13 +2147,42 @@ async def yookassa_webhook(request: Request):
                     is_auto_payment = True
                     logger.info(f"🔄 Обнаружен отмененный автоплатеж {payment_id} для пользователя {tg_user_id}")
                     
-                    # Автоматически отключаем автопродление при отказе
+                    # КРИТИЧЕСКИ ВАЖНО: Проверяем, является ли это бонусная подписка
+                    # Для бонусных подписок НЕ отключаем автопродление сразу - даем возможность выполнить все 3 попытки
+                    from db import get_subscription_info, get_auto_renewal_attempts
+                    from config import get_bonus_week_start, get_bonus_week_end
+                    sub_info = await get_subscription_info(tg_user_id)
+                    is_bonus_subscription = False
+                    
+                    if sub_info:
+                        starts_at = sub_info.get('starts_at')
+                        if starts_at:
+                            bonus_week_start = get_bonus_week_start()
+                            bonus_week_end = get_bonus_week_end()
+                            if bonus_week_start.tzinfo is None:
+                                bonus_week_start = bonus_week_start.replace(tzinfo=timezone.utc)
+                            if bonus_week_end.tzinfo is None:
+                                bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+                            if starts_at.tzinfo is None:
+                                starts_at = starts_at.replace(tzinfo=timezone.utc)
+                            is_bonus_subscription = bonus_week_start <= starts_at <= bonus_week_end
+                    
+                    # Получаем количество попыток
+                    attempts = await get_auto_renewal_attempts(tg_user_id)
+                    
+                    # Для бонусных подписок отключаем автопродление только после 3 неудачных попыток
+                    # Для обычных подписок отключаем сразу
                     from db import set_auto_renewal, is_auto_renewal_enabled, _clear_cache
                     auto_renewal_was_enabled = await is_auto_renewal_enabled(tg_user_id)
-                    if auto_renewal_was_enabled:
+                    
+                    if is_bonus_subscription and attempts < 3:
+                        # Бонусная подписка, еще не все попытки выполнены - НЕ отключаем автопродление
+                        logger.info(f"⏸️ Бонусная подписка для пользователя {tg_user_id}, попыток: {attempts}/3 - автопродление НЕ отключаем, ждем следующие попытки")
+                    elif auto_renewal_was_enabled:
+                        # Обычная подписка или все 3 попытки выполнены - отключаем автопродление
                         await set_auto_renewal(tg_user_id, False)
                         _clear_cache()
-                        logger.info(f"🔄 Автопродление автоматически отключено для пользователя {tg_user_id} из-за отказа автоплатежа")
+                        logger.info(f"🔄 Автопродление автоматически отключено для пользователя {tg_user_id} из-за отказа автоплатежа (попыток: {attempts}/3, бонусная: {is_bonus_subscription})")
                         
                         # Проверяем, была ли это недостаточность средств
                         insufficient_funds_detected = False
