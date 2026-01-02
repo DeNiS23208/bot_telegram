@@ -993,7 +993,17 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
     
     # Формируем текст с предупреждением о бонусной неделе
     bonus_duration_days = dni_prazdnika / 1440  # Конвертируем минуты в дни
-    bonus_duration_text = f"{dni_prazdnika} минут" if dni_prazdnika < 60 else f"{dni_prazdnika // 60} час{'а' if 2 <= dni_prazdnika // 60 <= 4 else 'ов'}"
+    # Форматируем длительность: показываем часы и минуты
+    hours = dni_prazdnika // 60
+    minutes = dni_prazdnika % 60
+    if hours > 0 and minutes > 0:
+        hours_text = f"{hours} час{'а' if 2 <= hours <= 4 else 'ов'}"
+        minutes_text = f"{minutes} минут{'ы' if 2 <= minutes <= 4 else ''}"
+        bonus_duration_text = f"{hours_text} {minutes_text}"
+    elif hours > 0:
+        bonus_duration_text = f"{hours} час{'а' if 2 <= hours <= 4 else 'ов'}"
+    else:
+        bonus_duration_text = f"{minutes} минут{'ы' if 2 <= minutes <= 4 else ''}"
     
     pay_button = InlineKeyboardButton(text="💳 Оплатить 1₽", url=pay_url)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[pay_button]])
