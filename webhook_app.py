@@ -956,6 +956,10 @@ async def check_bonus_week_transition_to_production():
                     attempts = await get_auto_renewal_attempts(telegram_id)
                     last_attempt_at = await get_last_auto_renewal_attempt_at(telegram_id)
                     
+                    # КРИТИЧЕСКИ ВАЖНО: Убеждаемся, что last_attempt_at имеет timezone
+                    if last_attempt_at and last_attempt_at.tzinfo is None:
+                        last_attempt_at = last_attempt_at.replace(tzinfo=timezone.utc)
+                    
                     # Определяем, нужно ли выполнить попытку автопродления
                     should_attempt = False
                     attempt_number = 0
