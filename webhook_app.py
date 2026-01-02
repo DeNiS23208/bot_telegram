@@ -304,9 +304,11 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     has_active_subscription = expires_at and expires_at > now
     auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
     
+    # Получаем количество попыток для проверки
+    attempts = await get_auto_renewal_attempts(telegram_id)
+    
     # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено после 3 неудачных попыток,
     # считаем подписку неактивной для отображения меню, даже если expires_at > now
-    attempts = await get_auto_renewal_attempts(telegram_id)
     if not auto_renewal_enabled and attempts >= 3:
         # Все 3 попытки неудачны - показываем меню с "Получить доступ", даже если подписка еще не истекла
         has_active_subscription = False
@@ -323,11 +325,21 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     bonus_week_end = get_bonus_week_end()
     if bonus_week_end.tzinfo is None:
         bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
-    # ПРИОРИТЕТНАЯ ПРОВЕРКА: Если текущее время больше времени окончания бонусной недели - бонусная неделя ЗАКОНЧИЛАСЬ
-    # Это проверка имеет приоритет над is_bonus_week_active()
-    if now > bonus_week_end:
-        bonus_week_active = False  # Принудительно устанавливаем, что бонусная неделя закончилась
-        logger.info(f"🔍 Бонусная неделя закончилась по времени: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}")
+    
+    # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, но еще идут попытки автопродления (attempts < 3),
+    # меню НЕ должно меняться - оно должно оставаться бонусным до завершения всех попыток
+    bonus_week_ended = now > bonus_week_end
+    attempts = await get_auto_renewal_attempts(telegram_id)
+    auto_renewal_in_progress = auto_renewal_enabled and attempts < 3 and bonus_week_ended
+    
+    if bonus_week_ended and not auto_renewal_in_progress:
+        # Бонусная неделя закончилась и попытки завершены - показываем продакшн меню
+        bonus_week_active = False
+        logger.info(f"🔍 Бонусная неделя закончилась по времени: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}, попытки завершены")
+    elif auto_renewal_in_progress:
+        # Бонусная неделя закончилась, но еще идут попытки автопродления - показываем бонусное меню
+        bonus_week_active = True
+        logger.info(f"🔍 Бонусная неделя закончилась, но идут попытки автопродления (attempts={attempts}/3) - показываем бонусное меню")
     else:
         # Только если бонусная неделя еще не закончилась по времени, проверяем is_bonus_week_active()
         bonus_week_active = is_bonus_week_active()
