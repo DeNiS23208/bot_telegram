@@ -845,7 +845,8 @@ async def check_bonus_week_transition_to_production():
             await asyncio.sleep(10)  # Проверяем каждые 10 секунд для более точного срабатывания
             
             # Проверяем, закончилась ли бонусная неделя
-            if is_bonus_week_active():
+            bonus_week_active = is_bonus_week_active()
+            if bonus_week_active:
                 notified_users_production.clear()
                 continue
             
@@ -860,11 +861,28 @@ async def check_bonus_week_transition_to_production():
             now = datetime.now(timezone.utc)
             time_since_bonus_end = (now - bonus_week_end).total_seconds() / 60
             
-            # Получаем всех пользователей с активными подписками
-            from db import get_all_active_subscriptions, get_subscription_info, get_last_auto_renewal_attempt_at, get_auto_renewal_attempts
-            active_subs = await get_all_active_subscriptions()
+            logger.info(f"🔄 check_bonus_week_transition_to_production: бонусная неделя закончилась {time_since_bonus_end:.1f} минут назад, проверяем подписки...")
             
-            for telegram_id, expires_at_str in active_subs:
+            # КРИТИЧЕСКИ ВАЖНО: Получаем ВСЕ подписки (включая истекшие), которые были созданы во время бонусной недели
+            # Это необходимо, потому что когда бонусная неделя заканчивается, подписка уже истекла
+            # и не попадает в get_all_active_subscriptions()
+            from db import get_subscription_info, get_last_auto_renewal_attempt_at, get_auto_renewal_attempts
+            async with aiosqlite.connect(DB_PATH) as db_conn:
+                cursor = await db_conn.execute(
+                    """
+                    SELECT telegram_id, expires_at, starts_at 
+                    FROM subscriptions 
+                    WHERE starts_at IS NOT NULL
+                    """,
+                )
+                all_subs = await cursor.fetchall()
+            
+            logger.info(f"🔍 check_bonus_week_transition_to_production: найдено {len(all_subs)} подписок с starts_at")
+            
+            for row in all_subs:
+                telegram_id = row[0]
+                expires_at_str = row[1]
+                starts_at_str = row[2] if len(row) > 2 else None
                 try:
                     expires_at = datetime.fromisoformat(expires_at_str)
                     if expires_at.tzinfo is None:
