@@ -884,18 +884,32 @@ async def check_bonus_week_transition_to_production():
                 expires_at_str = row[1]
                 starts_at_str = row[2] if len(row) > 2 else None
                 try:
+                    if not expires_at_str:
+                        continue
                     expires_at = datetime.fromisoformat(expires_at_str)
                     if expires_at.tzinfo is None:
                         expires_at = expires_at.replace(tzinfo=timezone.utc)
                     
-                    # Получаем полную информацию о подписке
+                    # Используем starts_at из запроса, если есть
+                    if starts_at_str:
+                        starts_at = datetime.fromisoformat(starts_at_str)
+                        if starts_at.tzinfo is None:
+                            starts_at = starts_at.replace(tzinfo=timezone.utc)
+                    else:
+                        # Если starts_at нет в запросе, получаем из sub_info
+                        sub_info = await get_subscription_info(telegram_id)
+                        if not sub_info:
+                            continue
+                        starts_at = sub_info.get('starts_at')
+                        if starts_at and starts_at.tzinfo is None:
+                            starts_at = starts_at.replace(tzinfo=timezone.utc)
+                        if not starts_at:
+                            continue
+                    
+                    # Получаем полную информацию о подписке для автопродления
                     sub_info = await get_subscription_info(telegram_id)
                     if not sub_info:
                         continue
-                    
-                    starts_at = sub_info.get('starts_at')
-                    if starts_at and starts_at.tzinfo is None:
-                        starts_at = starts_at.replace(tzinfo=timezone.utc)
                     
                     # Проверяем, что это подписка из бонусной недели
                     is_bonus_subscription = False
