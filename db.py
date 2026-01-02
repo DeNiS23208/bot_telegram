@@ -69,6 +69,19 @@ async def init_db() -> None:
         except Exception:
             pass
         
+        # Добавляем колонки для отслеживания попыток автопродления
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN auto_renewal_attempts INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+        
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN last_auto_renewal_attempt_at TEXT")
+            await db.commit()
+        except Exception:
+            pass
+        
         await db.execute("""
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -419,6 +432,66 @@ async def get_subscription_expired_notified(telegram_id: int) -> bool:
         )
         row = await cur.fetchone()
     return bool(row and row[0]) if row else False
+
+
+async def get_auto_renewal_attempts(telegram_id: int) -> int:
+    """Получает количество попыток автопродления"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT auto_renewal_attempts FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+async def increment_auto_renewal_attempts(telegram_id: int) -> None:
+    """Увеличивает счетчик попыток автопродления и обновляет время последней попытки"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.utcnow().isoformat()
+        await db.execute(
+            """
+            UPDATE subscriptions 
+            SET auto_renewal_attempts = COALESCE(auto_renewal_attempts, 0) + 1,
+                last_auto_renewal_attempt_at = ?
+            WHERE telegram_id = ?
+            """,
+            (now, telegram_id)
+        )
+        await db.commit()
+    _clear_cache()
+
+
+async def reset_auto_renewal_attempts(telegram_id: int) -> None:
+    """Сбрасывает счетчик попыток автопродления"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE subscriptions 
+            SET auto_renewal_attempts = 0,
+                last_auto_renewal_attempt_at = NULL
+            WHERE telegram_id = ?
+            """,
+            (telegram_id,)
+        )
+        await db.commit()
+    _clear_cache()
+
+
+async def get_last_auto_renewal_attempt_at(telegram_id: int) -> Optional[datetime]:
+    """Получает время последней попытки автопродления"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT last_auto_renewal_attempt_at FROM subscriptions WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cur.fetchone()
+    if row and row[0]:
+        try:
+            return datetime.fromisoformat(row[0])
+        except:
+            return None
+    return None
 
 
 async def get_telegram_user_id_by_invite_link(invite_link: str) -> Optional[int]:
