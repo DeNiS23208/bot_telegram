@@ -855,13 +855,14 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
             except Exception as payment_check_error:
                 logger.warning(f"⚠️ Ошибка проверки деталей платежа {payment_id}: {payment_check_error}")
             
-            # КРИТИЧЕСКИ ВАЖНО: На 3 попытке (attempt_number == 3 И attempts_after_failure >= 3) 
+            # КРИТИЧЕСКИ ВАЖНО: Когда attempts_after_failure >= 3 (все 3 попытки неудачны)
             # отправляем уведомление, отзываем ссылку, баним и обновляем меню
             # ВАЖНО: Ссылка отзывается ТОЛЬКО после всех 3 попыток, а не во время них
-            # Проверяем И attempt_number == 3 И attempts_after_failure >= 3 для гарантии
-            logger.info(f"🔍 Проверка 3-й попытки для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}")
-            if attempt_number == 3 and attempts_after_failure >= 3:
+            # Проверяем attempts_after_failure >= 3, так как это гарантирует что все 3 попытки выполнены
+            logger.info(f"🔍 Проверка завершения попыток для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}")
+            if attempts_after_failure >= 3:
                 # Все 3 попытки неудачны - отправляем уведомление, отзываем ссылку, баним и обновляем меню
+                logger.info(f"🚨 ВСЕ 3 ПОПЫТКИ ЗАВЕРШЕНЫ для пользователя {telegram_id}! Отправляем уведомление, отзываем ссылку и баним пользователя")
                 from db import set_auto_renewal, get_invite_link
                 from telegram_utils import revoke_invite_link
                 
