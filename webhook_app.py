@@ -896,16 +896,23 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
         if refreshed_status == "succeeded":
             # Платеж успешен - активируем подписку
             await activate_subscription_days(telegram_id, days=auto_duration)
-            from db import _clear_cache
-            _clear_cache()
             
             # Сбрасываем счетчик попыток при успехе
             await reset_auto_renewal_attempts(telegram_id)
+            
+            # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш ПОСЛЕ активации подписки и сброса попыток
+            # Это гарантирует, что меню будет правильно сгенерировано
+            from db import _clear_cache
+            _clear_cache()
+            
+            # Даем время для обновления БД
+            await asyncio.sleep(0.5)
             
             # Выдаем новую ссылку после успешного автопродления
             subscription_expires_at = await get_subscription_expires_at(telegram_id)
             link_expire_date = subscription_expires_at if subscription_expires_at else (datetime.now(timezone.utc) + timedelta(days=auto_duration))
             
+            # Создаем только одну ссылку - сначала пробуем с creates_join_request=True
             invite_link = await safe_create_invite_link(
                 bot=bot,
                 chat_id=CHANNEL_ID,
@@ -913,6 +920,7 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                 expire_date=link_expire_date
             )
             
+            # Если не получилось создать с creates_join_request=True, пробуем без него
             if not invite_link:
                 invite_link = await safe_create_invite_link(
                     bot=bot,
@@ -922,8 +930,10 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     expire_date=link_expire_date
                 )
             
+            # Сохраняем только одну ссылку
             if invite_link:
                 await save_invite_link(invite_link, telegram_id, payment_id)
+                logger.info(f"✅ Создана и сохранена одна ссылка для пользователя {telegram_id} после успешного автопродления")
             
             # Отправляем уведомление об успешном автопродлении
             amount_float = float(auto_amount)
@@ -1829,29 +1839,9 @@ async def check_expired_subscriptions():
                                         logger.warning(f"⚠️ Пропуск отправки уведомления об автопродлении: платеж {payment_id} был создан более 5 минут назад (возможно, это старый платеж)")
                                         continue
                                     
-                                    # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, не отправляли ли мы уже уведомление
-                                    # ВАЖНО: Проверяем ДО отправки, чтобы предотвратить дублирование
-                                    if await already_processed(auto_renewal_notification_key):
-                                        logger.warning(f"⚠️ Уведомление об автопродлении для платежа {payment_id} уже было отправлено пользователю {telegram_id} - пропускаем")
-                                        continue
-                                    
-                                    # КРИТИЧЕСКИ ВАЖНО: Помечаем уведомление как отправленное ДО отправки
-                                    # Это предотвращает race condition и дублирование уведомлений
-                                    await mark_processed(auto_renewal_notification_key)
-                                    await mark_processed(auto_renewal_user_key)  # Помечаем пользователя как обработанного
-                                    logger.info(f"✅ Уведомление об автопродлении помечено как отправленное ДО отправки для платежа {payment_id}, пользователь {telegram_id}")
-                                    
-                                    # Отправляем уведомление об успешном автопродлении
-                                    await safe_send_message(
-                                        bot=bot,
-                                        chat_id=telegram_id,
-                                        text="✅ Доступ автоматически продлен!\n\n"
-                                            f"Списано {auto_amount} {ruble_text} {payment_method_text}.\n"
-                                            f"Доступ продлен на {format_subscription_duration(auto_duration)}.\n\n"
-                                            "Спасибо за использование автопродления!"
-                                    )
-                                    logger.info(f"✅ Уведомление об автопродлении отправлено пользователю {telegram_id} для платежа {payment_id}")
-                                    logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id}")
+                                    # КРИТИЧЕСКИ ВАЖНО: НЕ отправляем уведомление об автопродлении здесь!
+                                    # Уведомление уже отправлено в attempt_auto_renewal, чтобы избежать дублирования
+                                    logger.info(f"✅ Автопродление выполнено для пользователя {telegram_id}, payment_id: {payment_id} (уведомление отправлено в attempt_auto_renewal)")
                                 else:
                                     # Платеж не прошел - проверяем причину и обрабатываем
                                     auto_payment_failed = True
