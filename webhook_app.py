@@ -3009,8 +3009,8 @@ async def yookassa_webhook(request: Request):
         # Проверяем, поддерживается ли тип платежного метода
         if payment_method_type and payment_method_type.lower() in supported_types:
             # Для поддерживаемых типов ВСЕГДА включаем автопродление (данные всегда сохраняются при оплате по договору с ЮKassa)
-        from db import save_payment_method, set_auto_renewal
-        await save_payment_method(tg_user_id, payment_method_id)
+            from db import save_payment_method, set_auto_renewal
+            await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
