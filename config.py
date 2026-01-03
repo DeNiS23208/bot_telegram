@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 PAYMENT_LINK_VALID_MINUTES = 10  # Срок действия ссылки на оплату
 # Длительность подписки
 SUBSCRIPTION_DAYS = 30  # Длительность подписки (30 дней для продакшн режима)
-SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS = 3  # За сколько дней уведомлять об истечении
-SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS = 24  # Окно для уведомления (часы)
+# ДЛЯ ТЕСТОВ: уведомление за 2 минуты до истечения (2 минуты = 2/1440 дней)
+SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS = 2 / 1440  # За сколько дней уведомлять об истечении (2 минуты для теста)
+SUBSCRIPTION_EXPIRING_NOTIFICATION_WINDOW_HOURS = 24  # Окно для уведомления (часы) - период, в течение которого уведомление может быть отправлено
 
 # Интервалы проверки фоновых задач
 CHECK_EXPIRED_PAYMENTS_INTERVAL_SECONDS = 60  # Проверка истекших платежей (секунды) - проверка каждую минуту для точного уведомления через 10 минут
@@ -54,8 +55,9 @@ BONUS_WEEK_PRICE_RUB = "1.00"  # Цена бонусной недели
 BONUS_WEEK_DURATION_MINUTES = dni_prazdnika  # Длительность в минутах
 
 # Продакшн значения (после окончания бонусной недели)
-PRODUCTION_PRICE_RUB = "2990.00"  # Обычная цена подписки
-PRODUCTION_DURATION_DAYS = 30  # Обычная длительность подписки
+# ДЛЯ ТЕСТОВ: цена 2 рубля, длительность 5 минут
+PRODUCTION_PRICE_RUB = "2.00"  # Обычная цена подписки (2 рубля для теста, в продакшене будет 2990.00)
+PRODUCTION_DURATION_DAYS = 5 / 1440  # Обычная длительность подписки (5 минут для теста, в продакшене будет 30 дней)
 
 # ================== ФУНКЦИИ ДЛЯ ОПРЕДЕЛЕНИЯ РЕЖИМА ==================
 def is_bonus_week_active() -> bool:
