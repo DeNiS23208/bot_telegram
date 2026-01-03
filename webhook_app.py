@@ -834,7 +834,7 @@ async def check_subscriptions_expiring_soon():
                                     "Если доступ не будет продлен, вас удалят из канала."
                         )
                         notified_users.add(telegram_id)
-                            logger.info(f"✅ Отправлено уведомление о скором истечении подписки пользователю {telegram_id}")
+                        logger.info(f"✅ Отправлено уведомление о скором истечении подписки пользователю {telegram_id}")
                     else:
                         # Это дни для продакшна
                         notification_days_min = notification_days - 1
