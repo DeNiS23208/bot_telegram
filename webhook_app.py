@@ -1615,55 +1615,83 @@ async def check_expired_subscriptions():
                             auto_payment_failed = True
                         # Проверяем, включено ли автопродление и есть ли сохраненный способ оплаты
                         elif auto_renewal_enabled and saved_payment_method_id:
-                            # Пытаемся выполнить автоматическое списание
+                            # КРИТИЧЕСКИ ВАЖНО: Для продакшн подписок используем механизм 3 попыток автопродления
+                            # аналогично бонусным подпискам
                             try:
-                                from payments import create_auto_payment, get_payment_status
-                                from db import activate_subscription_days, save_payment, update_payment_status
+                                from db import get_auto_renewal_attempts, get_last_auto_renewal_attempt_at
                                 
-                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                                # Получаем информацию о попытках
+                                attempts = await get_auto_renewal_attempts(telegram_id)
+                                last_attempt_at = await get_last_auto_renewal_attempt_at(telegram_id)
                                 
-                                # Определяем цену и длительность для автопродления
-                                # КРИТИЧЕСКИ ВАЖНО: Автопродление для бонусных подписок должно срабатывать ТОЛЬКО при окончании бонусной недели
-                                # Если бонусная неделя еще активна и это бонусная подписка, НЕ делаем автопродление - ждем окончания бонусной недели
-                                if bonus_week_ended and is_bonus_subscription:
-                                    # Бонусная неделя закончилась и это была подписка из бонусной недели - используем продакшн цены
+                                # КРИТИЧЕСКИ ВАЖНО: Убеждаемся, что last_attempt_at имеет timezone
+                                if last_attempt_at and last_attempt_at.tzinfo is None:
+                                    last_attempt_at = last_attempt_at.replace(tzinfo=timezone.utc)
+                                
+                                # Определяем, нужно ли выполнить попытку автопродления
+                                should_attempt = False
+                                attempt_number = 0
+                                
+                                # Вычисляем время с момента истечения подписки
+                                time_since_expiry = (now - expires_at).total_seconds() / 60
+                                
+                                if 0 <= time_since_expiry <= 3 and attempts == 0:
+                                    # Первая попытка: сразу после истечения подписки
+                                    should_attempt = True
+                                    attempt_number = 1
+                                    logger.info(f"🔄 Первая попытка автопродления для пользователя {telegram_id} (подписка истекла {time_since_expiry:.1f} минут назад)")
+                                elif attempts > 0 and attempts < 3:
+                                    # Проверяем, прошло ли достаточно времени с последней попытки
+                                    if last_attempt_at:
+                                        try:
+                                            time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
+                                            # Интервал между попытками: 1 минута (для тестов)
+                                            from config import AUTO_RENEWAL_ATTEMPT_INTERVAL_MINUTES
+                                            if time_since_last_attempt >= AUTO_RENEWAL_ATTEMPT_INTERVAL_MINUTES - 0.5:  # С погрешностью
+                                                should_attempt = True
+                                                attempt_number = attempts + 1
+                                                logger.info(f"🔄 Попытка {attempt_number} автопродления для пользователя {telegram_id} (прошло {time_since_last_attempt:.1f} минут с последней попытки)")
+                                        except Exception as time_error:
+                                            logger.warning(f"⚠️ Ошибка вычисления времени с последней попытки для пользователя {telegram_id}: {time_error}")
+                                            # Если ошибка, все равно пытаемся выполнить попытку, если прошло достаточно времени
+                                            should_attempt = True
+                                            attempt_number = attempts + 1
+                                    else:
+                                        # Если last_attempt_at нет, но есть попытки - выполняем следующую попытку
+                                        should_attempt = True
+                                        attempt_number = attempts + 1
+                                        logger.info(f"🔄 Попытка {attempt_number} автопродления для пользователя {telegram_id} (нет информации о последней попытке)")
+                                
+                                if should_attempt:
+                                    # Определяем цену и длительность для автопродления
                                     auto_amount = get_production_subscription_price()
                                     auto_duration = get_production_subscription_duration()
-                                    logger.info(f"🔄 Бонусная неделя закончилась для пользователя {telegram_id}, используем продакшн цены: {auto_amount} руб, {auto_duration} дней")
-                                elif is_bonus_week_active() and is_bonus_subscription:
-                                    # Бонусная неделя еще активна и это бонусная подписка - НЕ делаем автопродление, ждем окончания бонусной недели
-                                    logger.info(f"⏸️ Бонусная неделя еще активна для пользователя {telegram_id}, автопродление будет выполнено при окончании бонусной недели (expires_at={expires_at}, bonus_week_end={bonus_week_end})")
-                                    auto_payment_failed = True  # Помечаем как неудачное, чтобы не отправлять уведомление
-                                    continue  # Пропускаем автопродление
-                                elif is_bonus_week_active():
-                                    # Бонусная неделя активна, но это не бонусная подписка (продакшн подписка) - используем продакшн цены
-                                    auto_amount = get_production_subscription_price()
-                                    auto_duration = get_production_subscription_duration()
-                                    logger.info(f"💼 Продакшн подписка во время бонусной недели для пользователя {telegram_id}, используем продакшн цены: {auto_amount} руб, {auto_duration} дней")
+                                    
+                                    logger.info(f"💼 Продакшн режим для пользователя {telegram_id}, попытка {attempt_number}, используем продакшн цены: {auto_amount} руб, {auto_duration} дней")
+                                    
+                                    # Выполняем попытку автопродления
+                                    success = await attempt_auto_renewal(telegram_id, saved_payment_method_id, auto_amount, auto_duration, attempt_number)
+                                    
+                                    # Получаем актуальное количество попыток после attempt_auto_renewal
+                                    attempts_after = await get_auto_renewal_attempts(telegram_id)
+                                    
+                                    if success:
+                                        # Успешно - меню уже обновлено в attempt_auto_renewal
+                                        logger.info(f"✅ Автопродление успешно для пользователя {telegram_id}, попытка {attempt_number}")
+                                        auto_payment_succeeded = True
+                                    elif attempts_after >= 3:
+                                        # Все 3 попытки неудачны - бан и меню с "Оплатить доступ"
+                                        # КРИТИЧЕСКИ ВАЖНО: Эта логика уже обработана в attempt_auto_renewal на 3 попытке
+                                        logger.info(f"✅ Все 3 попытки автопродления завершены для пользователя {telegram_id}, обработка выполнена в attempt_auto_renewal")
+                                        auto_payment_failed = True
+                                    else:
+                                        # Попытка не удалась, но еще есть попытки
+                                        auto_payment_failed = True
+                                        logger.info(f"⚠️ Попытка {attempt_number} автопродления не удалась для пользователя {telegram_id}, осталось {3 - attempts_after} попыток")
                                 else:
-                                    # Обычный продакшн режим
-                                    auto_amount = get_production_subscription_price()
-                                    auto_duration = get_production_subscription_duration()
-                                    logger.info(f"💼 Продакшн режим для пользователя {telegram_id}, используем продакшн цены: {auto_amount} руб, {auto_duration} дней")
-                                
-                                # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, не выполняли ли мы уже автопродление для этого пользователя
-                                # после окончания бонусной недели (чтобы выполнить только ОДИН РАЗ)
-                                auto_payment_bonus_key = f"auto_payment_bonus_ended_{telegram_id}"
-                                if await already_processed(auto_payment_bonus_key):
-                                    logger.warning(f"⚠️ Автопродление после окончания бонусной недели уже было выполнено для пользователя {telegram_id} - пропускаем")
+                                    # Еще не время для попытки
+                                    logger.info(f"⏸️ Еще не время для попытки автопродления для пользователя {telegram_id} (attempts={attempts}, time_since_expiry={time_since_expiry:.1f} мин)")
                                     continue
-                                
-                                # Создаем автоматический платеж
-                                payment_id, payment_status = create_auto_payment(
-                                    amount_rub=auto_amount,
-                                    description=f"Автопродление доступа на канал ({format_subscription_duration(auto_duration)})",
-                            customer_email=CUSTOMER_EMAIL,
-                            telegram_user_id=telegram_id,
-                                    payment_method_id=saved_payment_method_id,
-                        )
-                        
-                        # Сохраняем платеж
-                                await save_payment(telegram_id, payment_id, status=payment_status)
                                 
                                 # Помечаем, что автопродление после окончания бонусной недели было выполнено (ОДИН РАЗ)
                                 await mark_processed(auto_payment_bonus_key)

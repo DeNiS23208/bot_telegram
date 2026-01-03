@@ -1380,9 +1380,15 @@ async def manage_subscription(message: Message):
     # Определяем, является ли подписка бонусной
     is_bonus = False
     if starts_at:
+        # КРИТИЧЕСКИ ВАЖНО: Убеждаемся, что starts_at имеет timezone
+        if starts_at.tzinfo is None:
+            starts_at = starts_at.replace(tzinfo=timezone.utc)
         # Проверяем по starts_at - если starts_at в диапазоне бонусной недели, это бонусная подписка
         is_bonus = bonus_week_start <= starts_at <= bonus_week_end
     elif expires_at:
+        # КРИТИЧЕСКИ ВАЖНО: Убеждаемся, что expires_at имеет timezone
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         # Если starts_at нет, проверяем по expires_at - если expires_at <= bonus_week_end, это бонусная подписка
         is_bonus = expires_at <= bonus_week_end
     
