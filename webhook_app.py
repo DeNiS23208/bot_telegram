@@ -118,6 +118,117 @@ async def startup_event():
     logger.info("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
 
 
+@app.post("/yandex-form/webhook")
+async def yandex_form_webhook(request: Request):
+    """Обрабатывает webhook от Яндекс.Формы при заполнении формы"""
+    try:
+        data = await request.json()
+        logger.info(f"📥 Получен webhook от Яндекс.Формы: {data}")
+        
+        # Получаем токен из данных (будет передаваться через URL параметр или в теле запроса)
+        token = data.get("token")
+        if not token:
+            # Пытаемся получить из query параметров
+            token = request.query_params.get("token")
+        
+        if not token:
+            logger.warning("⚠️ Токен не найден в webhook от Яндекс.Формы")
+            return {"success": False, "message": "Токен не предоставлен"}
+        
+        # Находим пользователя по токену
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT telegram_id, form_filled FROM users WHERE form_token = ?",
+                (token,)
+            )
+            user = await cursor.fetchone()
+            
+            if not user:
+                logger.warning(f"⚠️ Пользователь с токеном {token} не найден")
+                return {"success": False, "message": "Пользователь не найден"}
+            
+            telegram_id = user[0]
+            form_filled = user[1]
+            
+            if form_filled == 1:
+                logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
+                return {"success": True, "message": "Форма уже была заполнена ранее"}
+            
+            # Получаем данные из формы
+            answers = data.get("answers", {})
+            name = answers.get("name", "").strip()
+            phone = answers.get("phone", "").strip()
+            email = answers.get("email", "").strip()
+            gender = answers.get("gender", "")
+            city = answers.get("city", "").strip()
+            activity = answers.get("activity", "").strip()
+            
+            # Создаем таблицу для данных формы, если её нет
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS form_data (
+                    telegram_id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    phone TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    gender TEXT,
+                    city TEXT,
+                    activity TEXT,
+                    submitted_at TEXT NOT NULL,
+                    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+                )
+            """)
+            
+            # Сохраняем данные формы
+            await db.execute("""
+                INSERT OR REPLACE INTO form_data 
+                (telegram_id, name, phone, email, gender, city, activity, submitted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                telegram_id,
+                name,
+                phone,
+                email,
+                gender,
+                city,
+                activity,
+                datetime.now(timezone.utc).isoformat()
+            ))
+            
+            # Отмечаем форму как заполненную
+            await db.execute("""
+                UPDATE users 
+                SET form_filled = 1, form_filled_at = ?
+                WHERE telegram_id = ?
+            """, (datetime.now(timezone.utc).isoformat(), telegram_id))
+            
+            await db.commit()
+            
+            logger.info(f"✅ Форма заполнена пользователем {telegram_id} через Яндекс.Форму")
+            
+            # Отправляем уведомление пользователю в бот
+            try:
+                await safe_send_message(
+                    bot=bot,
+                    chat_id=telegram_id,
+                    text=(
+                        "✅ <b>Отлично! Данные получены</b>\n\n"
+                        "Ваша форма успешно заполнена и обработана.\n"
+                        "Теперь вы можете пользоваться ботом. Выберите действие в меню 👇"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as notify_error:
+                logger.warning(f"⚠️ Не удалось отправить уведомление пользователю {telegram_id}: {notify_error}")
+            
+            return {"success": True, "message": "Данные успешно обработаны"}
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки webhook от Яндекс.Формы: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "message": "Произошла ошибка при обработке данных"}
+
+
 # Обработчик возврата с ЮKassa (если пользователь вернулся без оплаты)
 @app.get("/payment/return")
 async def payment_return(request: Request):
@@ -979,8 +1090,8 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
 async def check_bonus_week_transition_to_production():
     """Проверяет переход в продакшн режим после окончания бонусной недели и выполняет автопродление:
     1. При окончании бонусной недели - первая попытка автопродления (сразу)
-    2. Если неудачно - вторая попытка через 5 минут
-    3. Если неудачно - третья попытка еще через 5 минут
+    2. Если неудачно - вторая попытка через 1 минуту
+    3. Если неудачно - третья попытка еще через 1 минуту
     4. Если все 3 попытки неудачны - бан и меню с "Оплатить доступ"
     5. Если на любой попытке успешно - меню с "Управление доступом"
     """
@@ -1104,7 +1215,7 @@ async def check_bonus_week_transition_to_production():
                         if last_attempt_at:
                             try:
                                 time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
-                                if 2 <= time_since_last_attempt <= 5:  # С погрешностью ±3 минуты
+                                if 1 <= time_since_last_attempt <= 2:  # С погрешностью ±1 минута (интервал 1 минута)
                                     should_attempt = True
                                     attempt_number = attempts + 1
                             except Exception as time_error:
