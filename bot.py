@@ -1473,7 +1473,7 @@ async def manage_subscription(message: Message):
                     resize_keyboard=True
                 )
             
-    await message.answer(
+            await message.answer(
                 management_text,
                 parse_mode="HTML",
                 reply_markup=keyboard
