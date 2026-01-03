@@ -815,17 +815,39 @@ async def check_subscriptions_expiring_soon():
                     days_left = (expires_at - now).days
                     
                     # Если осталось примерно N дней (с погрешностью ±1 день)
-                    notification_days_min = SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS - 1
-                    notification_days_max = SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS + 1
-                    if notification_days_min <= days_left <= notification_days_max:
-                        await safe_send_message(
-                            bot=bot,
-                            chat_id=telegram_id,
-                            text=f"⏰ Внимание! Доступ истекает через {SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS} дня\n\n"
-                                f"Ваш доступ действует до: {expires_at.date()}\n\n"
-                                "Для продления доступа нажмите кнопку 💳 Получить доступ.\n"
-                                "Если доступ не будет продлен, вас удалят из канала."
+                    # Для тестов: если SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS < 1, значит это минуты
+                    notification_days = SUBSCRIPTION_EXPIRING_NOTIFICATION_DAYS
+                    if notification_days < 1:
+                        # Это минуты для теста
+                        notification_minutes = int(notification_days * 1440)
+                        time_until_expiry = (expires_at - now).total_seconds() / 60
+                        notification_minutes_min = notification_minutes - 1
+                        notification_minutes_max = notification_minutes + 1
+                        if notification_minutes_min <= time_until_expiry <= notification_minutes_max:
+                            minutes_text = f"{notification_minutes} минут{'ы' if 2 <= notification_minutes <= 4 else ''}"
+                            await safe_send_message(
+                                bot=bot,
+                                chat_id=telegram_id,
+                                text=f"⏰ Внимание! Доступ истекает через {minutes_text}\n\n"
+                                    f"Ваш доступ действует до: {format_datetime_moscow(expires_at)}\n\n"
+                                    "Для продления доступа нажмите кнопку 💳 Получить доступ.\n"
+                                    "Если доступ не будет продлен, вас удалят из канала."
                         )
+                        notified_users.add(telegram_id)
+                            logger.info(f"✅ Отправлено уведомление о скором истечении подписки пользователю {telegram_id}")
+                    else:
+                        # Это дни для продакшна
+                        notification_days_min = notification_days - 1
+                        notification_days_max = notification_days + 1
+                        if notification_days_min <= days_left <= notification_days_max:
+                            await safe_send_message(
+                                bot=bot,
+                                chat_id=telegram_id,
+                                text=f"⏰ Внимание! Доступ истекает через {int(notification_days)} дня\n\n"
+                                    f"Ваш доступ действует до: {expires_at.date()}\n\n"
+                                    "Для продления доступа нажмите кнопку 💳 Получить доступ.\n"
+                                    "Если доступ не будет продлен, вас удалят из канала."
+                            )
                         notified_users.add(telegram_id)
                         logger.info(f"✅ Отправлено уведомление о скором истечении подписки пользователю {telegram_id}")
                         
@@ -1432,7 +1454,7 @@ async def check_expired_subscriptions():
                     time_since_processed = (now - processed_users[telegram_id]).total_seconds()
                     if time_since_processed < 120:  # 2 минуты
                         logger.info(f"⏭️ Пользователь {telegram_id} уже обработан {time_since_processed:.0f} секунд назад, пропускаем")
-                        continue
+                    continue
                     # НЕ удаляем из processed_users автоматически - пусть остается до очистки выше
                     logger.info(f"🔄 Пользователь {telegram_id} был обработан {time_since_processed:.0f} секунд назад, продолжаем обработку")
                     
@@ -1581,8 +1603,8 @@ async def check_expired_subscriptions():
                                 from payments import create_auto_payment, get_payment_status
                                 from db import activate_subscription_days, save_payment, update_payment_status
                                 
-                                CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
-                                
+                        CUSTOMER_EMAIL = os.getenv("PAYMENT_CUSTOMER_EMAIL", "test@example.com")
+                        
                                 # Определяем цену и длительность для автопродления
                                 # КРИТИЧЕСКИ ВАЖНО: Автопродление для бонусных подписок должно срабатывать ТОЛЬКО при окончании бонусной недели
                                 # Если бонусная неделя еще активна и это бонусная подписка, НЕ делаем автопродление - ждем окончания бонусной недели
@@ -2986,12 +3008,12 @@ async def yookassa_webhook(request: Request):
         # Проверяем, поддерживается ли тип платежного метода
         if payment_method_type and payment_method_type.lower() in supported_types:
             # Для поддерживаемых типов ВСЕГДА включаем автопродление (данные всегда сохраняются при оплате по договору с ЮKassa)
-            from db import save_payment_method, set_auto_renewal
-            await save_payment_method(tg_user_id, payment_method_id)
+        from db import save_payment_method, set_auto_renewal
+        await save_payment_method(tg_user_id, payment_method_id)
             logger.info(f"💾 Сохранен payment_method_id для пользователя {tg_user_id}: {payment_method_id} (тип: {payment_method_type})")
             
             # Включаем автопродление
-            await set_auto_renewal(tg_user_id, True)
+        await set_auto_renewal(tg_user_id, True)
             logger.info(f"✅ Автопродление автоматически включено для пользователя {tg_user_id} (тип: {payment_method_type}, данные всегда сохраняются при оплате)")
             
             # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш ПОСЛЕ установки автопродления, чтобы обработчик "Управление доступом"
@@ -3018,7 +3040,7 @@ async def yookassa_webhook(request: Request):
                     f"• Доступ будет автоматически продлеваться каждые <b>30 дней</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
-            else:
+    else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
                 )
@@ -3106,7 +3128,7 @@ async def yookassa_webhook(request: Request):
         # Защита от использования другими будет через проверку в обработчике заявок
         invite_link = await safe_create_invite_link(
             bot=bot,
-            chat_id=CHANNEL_ID,
+                chat_id=CHANNEL_ID,
             creates_join_request=True,  # С заявкой - для проверки владельца
             expire_date=link_expire_date  # Ссылка действительна до окончания подписки пользователя
         )
@@ -3184,15 +3206,15 @@ async def yookassa_webhook(request: Request):
         except Exception as final_error:
             logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать уникальную ссылку даже в последней попытке: {final_error}")
             # Отправляем сообщение об ошибке, но НЕ прерываем обработку платежа
-            menu = await get_main_menu_for_user(tg_user_id)
+        menu = await get_main_menu_for_user(tg_user_id)
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
                 text="✅ <b>Оплата подтверждена!</b>\n\n"
                 "⚠️ Произошла ошибка при создании уникальной ссылки. Пожалуйста, свяжитесь с администратором для получения доступа.",
                 parse_mode="HTML",
-                reply_markup=menu
-            )
+            reply_markup=menu
+        )
             # НЕ возвращаем ошибку - продолжаем обработку платежа
             invite_link = None  # Устанавливаем в None, чтобы дальше обработать это
 
