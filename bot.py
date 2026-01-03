@@ -1846,7 +1846,7 @@ async def approve_join_request(join_request: ChatJoinRequest):
                     print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
                     import traceback
                     traceback.print_exc()
-        else:
+            else:
                 # Подписка истекла - отклоняем заявку
                 try:
                     await join_request.decline()
