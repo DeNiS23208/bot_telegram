@@ -1147,8 +1147,8 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-        starts_str = format_datetime_moscow(starts_at)
-        expires_str = format_datetime_moscow(expires_at)
+            starts_str = format_datetime_moscow(starts_at)
+            expires_str = format_datetime_moscow(expires_at)
         await message.answer(
             "━━━━━━━━━━━━━━━━━━━━\n"
             "✅ <b>Оплата подтверждена!</b>\n"
