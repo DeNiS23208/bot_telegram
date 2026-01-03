@@ -280,7 +280,7 @@ async def cmd_start(message: Message):
         )
     else:
         # Обычный текст для продакшн режима
-        welcome_text = (
+    welcome_text = (
         "👋 <b>Добро пожаловать!</b>\n\n"
         "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
         "🎯 Здесь вы можете:\n"
@@ -1147,16 +1147,16 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✅ <b>Оплата подтверждена!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Оплата подтверждена!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
                 parse_mode="HTML"
             )
         else:
@@ -1392,10 +1392,16 @@ async def manage_subscription(message: Message):
         # Если starts_at нет, проверяем по expires_at - если expires_at <= bonus_week_end, это бонусная подписка
         is_bonus = expires_at <= bonus_week_end
     
+    # КРИТИЧЕСКИ ВАЖНО: Показываем информацию о бонусной неделе ТОЛЬКО если:
+    # 1. Это бонусная подписка (is_bonus = True)
+    # 2. Бонусная неделя еще активна (is_bonus_week_active())
+    # Если бонусная неделя закончилась, даже если это была бонусная подписка, показываем продакшн меню
+    bonus_week_still_active = is_bonus_week_active()
+    
     # Вычисляем остаток времени до окончания бонусной недели (в реальном времени)
     # КРИТИЧЕСКИ ВАЖНО: Используем bonus_week_end (фиксированное время окончания бонусной недели),
     # а не expires_at подписки, так как expires_at может быть установлен неправильно
-    if is_bonus:
+    if is_bonus and bonus_week_still_active:
         # Это подписка из бонусной недели (проверяем, что expires_at <= bonus_week_end)
         # ВАЖНО: Используем текущее время для расчета оставшегося времени
         now_real = datetime.now(timezone.utc)  # Получаем актуальное время каждый раз
@@ -1467,7 +1473,7 @@ async def manage_subscription(message: Message):
                     resize_keyboard=True
                 )
             
-            await message.answer(
+    await message.answer(
                 management_text,
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -1477,19 +1483,40 @@ async def manage_subscription(message: Message):
     # Обычное управление доступом (продакшн режим) или во время попыток автопродления
     # КРИТИЧЕСКИ ВАЖНО: Во время попыток автопродления (auto_renewal_in_progress) 
     # показываем меню "Управление доступом" + "О проекте", а не бонусное меню
-    from webhook_app import get_main_menu_for_user
-    from db import _clear_cache
-    _clear_cache()  # Очищаем кэш для актуальных данных
-    correct_menu = await get_main_menu_for_user(user_id)
     
-    await message.answer(
+    # КРИТИЧЕСКИ ВАЖНО: Проверяем, что бонусная неделя действительно закончилась
+    # Если бонусная неделя еще активна, но это не бонусная подписка - это продакшн режим
+    bonus_week_still_active = is_bonus_week_active()
+    
+    # Формируем текст управления доступом для продакшн режима
+    management_text = (
         "⚙️ <b>Управление доступом</b>\n\n"
         f"📅 <b>Активна с:</b> {starts_str}\n"
         f"📅 <b>Активна до:</b> {expires_str}\n\n"
         f"🔄 <b>Автопродление:</b> {auto_status}\n\n"
-        "Выберите действие ниже 👇",
+    )
+    
+    # Создаем клавиатуру с кнопками управления
+    keyboard_buttons = []
+    
+    # Добавляем кнопку для управления автопродлением
+    if auto_renewal_enabled:
+        keyboard_buttons.append([KeyboardButton(text=BTN_CANCEL_SUB)])
+    else:
+        keyboard_buttons.append([KeyboardButton(text=BTN_RESUME_SUB)])
+    
+    # Добавляем кнопку "Назад в меню"
+    keyboard_buttons.append([KeyboardButton(text=BTN_BACK_TO_MENU)])
+    
+    management_keyboard = ReplyKeyboardMarkup(
+        keyboard=keyboard_buttons,
+        resize_keyboard=True
+    )
+    
+    await message.answer(
+        management_text + "Выберите действие ниже 👇",
         parse_mode="HTML",
-        reply_markup=correct_menu
+        reply_markup=management_keyboard
     )
 
 
@@ -1845,14 +1872,14 @@ async def approve_join_request(join_request: ChatJoinRequest):
             
             if has_active_subscription:
                 # У пользователя есть активная подписка - одобряем заявку
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от пользователя {user_id} (активная подписка до {expires_at})")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
                     import traceback
                     traceback.print_exc()
-            else:
+        else:
                 # Подписка истекла - отклоняем заявку
                 try:
                     await join_request.decline()
