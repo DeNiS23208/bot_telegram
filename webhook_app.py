@@ -3207,7 +3207,7 @@ async def yookassa_webhook(request: Request):
         except Exception as final_error:
             logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать уникальную ссылку даже в последней попытке: {final_error}")
             # Отправляем сообщение об ошибке, но НЕ прерываем обработку платежа
-        menu = await get_main_menu_for_user(tg_user_id)
+            menu = await get_main_menu_for_user(tg_user_id)
             await safe_send_message(
                 bot=bot,
                 chat_id=tg_user_id,
