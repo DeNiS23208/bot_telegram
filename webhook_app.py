@@ -448,7 +448,13 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     attempts = await get_auto_renewal_attempts(telegram_id)
     auto_renewal_in_progress = auto_renewal_enabled and attempts < 3 and bonus_week_ended
     
-    if bonus_week_ended and not auto_renewal_in_progress:
+    # КРИТИЧЕСКИ ВАЖНО: Если автопродление успешно (attempts = 0 и есть активная подписка),
+    # значит автопродление прошло успешно - показываем продакшн меню
+    if bonus_week_ended and attempts == 0 and has_active_subscription and auto_renewal_enabled:
+        # Автопродление успешно - показываем продакшн меню
+        bonus_week_active = False
+        logger.info(f"🔍 Автопродление успешно завершено для пользователя {telegram_id} - показываем продакшн меню")
+    elif bonus_week_ended and not auto_renewal_in_progress:
         # Бонусная неделя закончилась и попытки завершены - показываем продакшн меню
         bonus_week_active = False
         logger.info(f"🔍 Бонусная неделя закончилась по времени: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}, попытки завершены")
