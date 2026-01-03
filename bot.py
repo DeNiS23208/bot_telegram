@@ -280,15 +280,15 @@ async def cmd_start(message: Message):
         )
     else:
         # Обычный текст для продакшн режима
-        welcome_text = (
-            "👋 <b>Добро пожаловать!</b>\n\n"
-            "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
-            "🎯 Здесь вы можете:\n"
-            "• Получить доступ к закрытому каналу\n"
+    welcome_text = (
+        "👋 <b>Добро пожаловать!</b>\n\n"
+        "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
+        "🎯 Здесь вы можете:\n"
+        "• Получить доступ к закрытому каналу\n"
             "• Управлять своим доступом\n"
-            "• Настроить автопродление\n\n"
-            "Выберите действие в меню ниже 👇"
-        )
+        "• Настроить автопродление\n\n"
+        "Выберите действие в меню ниже 👇"
+    )
     
     # Отправляем видео с текстом в caption (встроено в сообщение)
     video_sent = False
@@ -1147,16 +1147,16 @@ async def check_payment(message: Message):
         expires_at = await get_subscription_expires_at(message.from_user.id)
         
         if starts_at and expires_at:
-            starts_str = format_datetime_moscow(starts_at)
-            expires_str = format_datetime_moscow(expires_at)
-            await message.answer(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "✅ <b>Оплата подтверждена!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
+        starts_str = format_datetime_moscow(starts_at)
+        expires_str = format_datetime_moscow(expires_at)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Оплата подтверждена!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📅 <b>Доступ активен с:</b> {starts_str}\n"
                 f"📅 <b>Доступ активен до:</b> {expires_str}\n\n"
-                "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
-                "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
+            "🎉 <b>Ссылка на канал должна прийти в ближайшее время!</b>\n"
+            "💬 Если ссылка не пришла, обратитесь в поддержку: @otd_zabota",
                 parse_mode="HTML"
             )
         else:
@@ -1306,6 +1306,10 @@ async def manage_subscription(message: Message):
     from datetime import timezone
     now = datetime.now(timezone.utc)  # Используем timezone-aware datetime для правильного расчета
     
+    # КРИТИЧЕСКИ ВАЖНО: Убеждаемся, что expires_at имеет timezone
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    
     # КРИТИЧЕСКИ ВАЖНО: Получаем количество попыток автопродления для проверки, идут ли попытки
     from db import get_auto_renewal_attempts, is_auto_renewal_enabled
     attempts = await get_auto_renewal_attempts(user_id)
@@ -1320,9 +1324,12 @@ async def manage_subscription(message: Message):
     bonus_week_active = is_bonus_week_active()
     auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3 and bonus_week_ended
     
+    # КРИТИЧЕСКИ ВАЖНО: Проверяем, активна ли подписка
+    has_active_subscription = expires_at and expires_at > now
+    
     # Если подписка истекла, но идут попытки автопродления И бонусная неделя закончилась
     # (не во время активной бонусной недели) - показываем информацию о попытках
-    if (not expires_at or expires_at <= now) and auto_renewal_in_progress and not bonus_week_active:
+    if not has_active_subscription and auto_renewal_in_progress and not bonus_week_active:
         # Идут попытки автопродления - показываем информацию о попытках вместо "нет доступа"
         from webhook_app import get_main_menu_for_user
         menu = await get_main_menu_for_user(user_id)
@@ -1338,13 +1345,15 @@ async def manage_subscription(message: Message):
             reply_markup=menu
         )
         return
-    elif not expires_at or expires_at <= now:
+    elif not has_active_subscription:
         # Подписка истекла и попытки не идут - показываем обычное сообщение
+        from webhook_app import get_main_menu_for_user
+        menu = await get_main_menu_for_user(user_id)
         await message.answer(
             "ℹ️ <b>У вас нет активного доступа</b>\n\n"
             "Доступ уже неактивен или отсутствует.",
             parse_mode="HTML",
-            reply_markup=await main_menu(user_id) if not is_bonus_week_active() else await bonus_week_menu()
+            reply_markup=menu
         )
         return
     
@@ -1452,7 +1461,7 @@ async def manage_subscription(message: Message):
                     resize_keyboard=True
                 )
             
-            await message.answer(
+    await message.answer(
                 management_text,
                 parse_mode="HTML",
                 reply_markup=keyboard
@@ -1830,14 +1839,14 @@ async def approve_join_request(join_request: ChatJoinRequest):
             
             if has_active_subscription:
                 # У пользователя есть активная подписка - одобряем заявку
-                try:
-                    await join_request.approve()
+            try:
+                await join_request.approve()
                     print(f"✅ Автоматически одобрена заявка от пользователя {user_id} (активная подписка до {expires_at})")
-                except Exception as e:
-                    print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
+            except Exception as e:
+                print(f"❌ Ошибка при одобрении заявки от {user_id}: {e}")
                     import traceback
                     traceback.print_exc()
-            else:
+        else:
                 # Подписка истекла - отклоняем заявку
                 try:
                     await join_request.decline()
