@@ -864,7 +864,7 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                 # Все 3 попытки неудачны - отправляем уведомление, отзываем ссылку, баним и обновляем меню
                 logger.info(f"🚨 ВСЕ 3 ПОПЫТКИ ЗАВЕРШЕНЫ для пользователя {telegram_id}! Отправляем уведомление, отзываем ссылку и баним пользователя")
                 from db import set_auto_renewal, get_invite_link
-                from telegram_utils import revoke_invite_link
+                # revoke_invite_link определена в webhook_app.py, не нужно импортировать
                 
                 await set_auto_renewal(telegram_id, False)
                 from db import _clear_cache
