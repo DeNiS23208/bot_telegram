@@ -3097,6 +3097,19 @@ async def yookassa_webhook(request: Request):
     subscription_expires_at = await get_subscription_expires_at(tg_user_id)
 
     # Создаем ПРИГЛАСИТЕЛЬНУЮ ссылку (прямой доступ) - пользователь заплатил!
+    # КРИТИЧЕСКИ ВАЖНО: Проверяем, является ли это автоплатежом
+    # Если да, то НЕ создаем ссылку и НЕ отправляем уведомление здесь
+    # Уведомление уже отправлено в attempt_auto_renewal
+    payment_description = getattr(payment, 'description', '') or ''
+    is_auto_payment = 'автопродление' in payment_description.lower() or 'auto' in payment_description.lower()
+    
+    if is_auto_payment:
+        logger.info(f"🔄 Обнаружен автоплатеж {payment_id} для пользователя {tg_user_id} - пропускаем создание ссылки и отправку уведомления (уже обработано в attempt_auto_renewal)")
+        # Для автоплатежей просто обновляем меню и возвращаемся
+        menu = await get_main_menu_for_user(tg_user_id)
+        await mark_processed(payment_id)
+        return {"ok": True, "event": "payment.succeeded", "auto_payment": True}
+    
     # Ссылка будет одноразовой (member_limit=1) и действительна до окончания подписки
     invite_link = None
     try:
