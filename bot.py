@@ -135,79 +135,20 @@ async def bonus_week_menu() -> ReplyKeyboardMarkup:
 
 async def main_menu(telegram_id: int = None) -> ReplyKeyboardMarkup:
     """Создает главное меню с учетом статуса доступа"""
-    # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш перед проверкой, чтобы получить актуальные данные
-    # Это особенно важно после оплаты, когда статус подписки и автопродления может измениться
-    from db import _clear_cache
-    _clear_cache()
-    
-    # Определяем, какая кнопка показывается: "Получить доступ" или "Управление доступом"
+    # КРИТИЧЕСКИ ВАЖНО: Используем get_main_menu_for_user из webhook_app для единообразия логики
+    # Это гарантирует, что меню будет одинаковым везде, включая обработку попыток автопродления
     if telegram_id:
-        expires_at = await get_subscription_expires_at(telegram_id)
-        from datetime import timezone
-        now = datetime.now(timezone.utc)
-        # Убеждаемся, что expires_at имеет timezone для сравнения
-        expires_at = ensure_timezone_aware(expires_at)
-        has_active_subscription = expires_at and expires_at > now
-        
-        # Проверяем, включено ли автопродление
-        # Если автопродление отключено, показываем "Получить доступ" даже при активной подписке
-        auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
-        # Показываем "Управление доступом" только если подписка активна И автопродление включено
-        show_manage_button = has_active_subscription and auto_renewal_enabled
-    else:
-        show_manage_button = False
+        from webhook_app import get_main_menu_for_user
+        return await get_main_menu_for_user(telegram_id)
     
-    # КРИТИЧЕСКИ ВАЖНО: Показываем бонусное меню ТОЛЬКО если:
-    # 1. Бонусная неделя активна
-    # 2. У пользователя НЕТ активной подписки с автопродлением (show_manage_button = False)
-    # Если у пользователя есть активная подписка с автопродлением - ВСЕГДА показываем продакшн меню
-    # Если бонусная неделя закончилась - ВСЕГДА показываем продакшн меню
-    # КРИТИЧЕСКИ ВАЖНО: Проверяем окончание бонусной недели ПО ВРЕМЕНИ - это приоритетная проверка
-    from config import get_bonus_week_end
-    bonus_week_end = get_bonus_week_end()
-    if bonus_week_end.tzinfo is None:
-        bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
-    # ПРИОРИТЕТНАЯ ПРОВЕРКА: Если текущее время больше времени окончания бонусной недели - бонусная неделя ЗАКОНЧИЛАСЬ
-    # Это проверка имеет приоритет над is_bonus_week_active()
-    if now > bonus_week_end:
-        bonus_week_active = False  # Принудительно устанавливаем, что бонусная неделя закончилась
-    else:
-        # Только если бонусная неделя еще не закончилась по времени, проверяем is_bonus_week_active()
-        bonus_week_active = is_bonus_week_active()
-    
-    if bonus_week_active:
-        if show_manage_button:
-            # У пользователя есть активная подписка с автопродлением - показываем продакшн меню
-            pass  # Продолжаем выполнение, чтобы показать продакшн меню
-        elif has_active_subscription and not auto_renewal_enabled:
-            # КРИТИЧЕСКИ ВАЖНО: Если в бонусной неделе у пользователя есть активная подписка,
-            # но автопродление отключено - показываем ТОЛЬКО "О проекте"
-            keyboard = [
-                [KeyboardButton(text=BTN_ABOUT_1)],
-            ]
-            return ReplyKeyboardMarkup(
-                keyboard=keyboard,
-                resize_keyboard=True,
-            )
-        else:
-            # У пользователя нет активной подписки - показываем бонусное меню
-            return await bonus_week_menu()
-    
-    # Если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
-    payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
-    
+    # Если telegram_id не передан, возвращаем меню по умолчанию
     keyboard = [
-        [KeyboardButton(text=payment_button)],
+        [KeyboardButton(text=BTN_PAY_1)],
         [KeyboardButton(text=BTN_STATUS_1)],
-    ]
-    
-    
-    keyboard.extend([
         [KeyboardButton(text=BTN_ABOUT_1)],
         [KeyboardButton(text=BTN_CHECK_1)],
         [KeyboardButton(text=BTN_SUPPORT)],
-    ])
-    
+    ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
@@ -1365,7 +1306,40 @@ async def manage_subscription(message: Message):
     from datetime import timezone
     now = datetime.now(timezone.utc)  # Используем timezone-aware datetime для правильного расчета
     
-    if not expires_at or expires_at <= now:
+    # КРИТИЧЕСКИ ВАЖНО: Получаем количество попыток автопродления для проверки, идут ли попытки
+    from db import get_auto_renewal_attempts, is_auto_renewal_enabled
+    attempts = await get_auto_renewal_attempts(user_id)
+    auto_renewal_enabled = await is_auto_renewal_enabled(user_id)
+    
+    # Проверяем, активна ли бонусная неделя и идут ли попытки автопродления
+    from config import get_bonus_week_end, is_bonus_week_active
+    bonus_week_end = get_bonus_week_end()
+    if bonus_week_end.tzinfo is None:
+        bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+    bonus_week_ended = now > bonus_week_end
+    bonus_week_active = is_bonus_week_active()
+    auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3 and bonus_week_ended
+    
+    # Если подписка истекла, но идут попытки автопродления И бонусная неделя закончилась
+    # (не во время активной бонусной недели) - показываем информацию о попытках
+    if (not expires_at or expires_at <= now) and auto_renewal_in_progress and not bonus_week_active:
+        # Идут попытки автопродления - показываем информацию о попытках вместо "нет доступа"
+        from webhook_app import get_main_menu_for_user
+        menu = await get_main_menu_for_user(user_id)
+        
+        await message.answer(
+            f"⚙️ <b>Управление доступом</b>\n\n"
+            f"🎉 <b>БОНУСНАЯ НЕДЕЛЯ</b>\n"
+            f"⏰ Производится попытка автопродления (попытка {attempts}/3)\n\n"
+            f"Автоматическое продление доступа на полную стоимость доступа.\n"
+            f"Стоимость: <b>2990 рублей</b>\n"
+            f"Срок доступа: <b>30 дней</b>",
+            parse_mode="HTML",
+            reply_markup=menu
+        )
+        return
+    elif not expires_at or expires_at <= now:
+        # Подписка истекла и попытки не идут - показываем обычное сообщение
         await message.answer(
             "ℹ️ <b>У вас нет активного доступа</b>\n\n"
             "Доступ уже неактивен или отсутствует.",
@@ -1379,16 +1353,29 @@ async def manage_subscription(message: Message):
     starts_str = format_datetime_moscow(starts_at) if starts_at else "неизвестно"
     expires_str = format_datetime_moscow(expires_at)
     
-    # Проверяем статус автопродления
-    auto_renewal_enabled = await is_auto_renewal_enabled(user_id)
+    # auto_renewal_enabled и attempts уже получены выше
     auto_status = "✅ Включено" if auto_renewal_enabled else "❌ Отключено"
     
     # Проверяем, активна ли бонусная неделя и является ли подписка бонусной
-    is_bonus = is_bonus_week_active()
+    from config import get_bonus_week_end, get_bonus_week_start
     bonus_week_end = get_bonus_week_end()
-    # Убеждаемся, что bonus_week_end имеет timezone
+    bonus_week_start = get_bonus_week_start()
+    bonus_week_ended = now > bonus_week_end
+    auto_renewal_in_progress = auto_renewal_enabled and attempts < 3 and bonus_week_ended
+    # Убеждаемся, что bonus_week_end и bonus_week_start имеют timezone
     if bonus_week_end.tzinfo is None:
         bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
+    if bonus_week_start.tzinfo is None:
+        bonus_week_start = bonus_week_start.replace(tzinfo=timezone.utc)
+    
+    # Определяем, является ли подписка бонусной
+    is_bonus = False
+    if starts_at:
+        # Проверяем по starts_at - если starts_at в диапазоне бонусной недели, это бонусная подписка
+        is_bonus = bonus_week_start <= starts_at <= bonus_week_end
+    elif expires_at:
+        # Если starts_at нет, проверяем по expires_at - если expires_at <= bonus_week_end, это бонусная подписка
+        is_bonus = expires_at <= bonus_week_end
     
     # Вычисляем остаток времени до окончания бонусной недели (в реальном времени)
     # КРИТИЧЕСКИ ВАЖНО: Используем bonus_week_end (фиксированное время окончания бонусной недели),
@@ -1472,7 +1459,14 @@ async def manage_subscription(message: Message):
             )
             return
     
-    # Обычное управление доступом (продакшн режим)
+    # Обычное управление доступом (продакшн режим) или во время попыток автопродления
+    # КРИТИЧЕСКИ ВАЖНО: Во время попыток автопродления (auto_renewal_in_progress) 
+    # показываем меню "Управление доступом" + "О проекте", а не бонусное меню
+    from webhook_app import get_main_menu_for_user
+    from db import _clear_cache
+    _clear_cache()  # Очищаем кэш для актуальных данных
+    correct_menu = await get_main_menu_for_user(user_id)
+    
     await message.answer(
         "⚙️ <b>Управление доступом</b>\n\n"
         f"📅 <b>Активна с:</b> {starts_str}\n"
@@ -1480,7 +1474,7 @@ async def manage_subscription(message: Message):
         f"🔄 <b>Автопродление:</b> {auto_status}\n\n"
         "Выберите действие ниже 👇",
         parse_mode="HTML",
-        reply_markup=await manage_subscription_menu(user_id)
+        reply_markup=correct_menu
     )
 
 
@@ -1489,42 +1483,13 @@ async def manage_subscription(message: Message):
 async def back_to_main_menu(message: Message):
     """Возврат в главное меню"""
     user_id = message.from_user.id
-    if is_bonus_week_active():
-        # В бонусной неделе проверяем, есть ли активная подписка
-        from db import get_subscription_expires_at
-        from datetime import timezone
-        expires_at = await get_subscription_expires_at(user_id)
-        now = datetime.now(timezone.utc)
-        expires_at = ensure_timezone_aware(expires_at)
-        has_active = expires_at and expires_at > now
-        
-        if has_active:
-            # Если есть активная подписка, показываем меню с "Управление доступом"
-            BTN_MANAGE_SUB = "⚙️ Управление доступом"
-            BTN_ABOUT_1 = "ℹ️ О проекте"
-            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-            keyboard = [
-                [KeyboardButton(text=BTN_MANAGE_SUB)],
-                [KeyboardButton(text=BTN_ABOUT_1)],
-            ]
-            menu = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-            await message.answer(
-                "📋 <b>Главное меню</b>",
-                parse_mode="HTML",
-                reply_markup=menu
-            )
-        else:
-            # Если нет активной подписки, показываем бонусное меню
-            await message.answer(
-                "📋 <b>Главное меню</b>",
-                parse_mode="HTML",
-                reply_markup=await bonus_week_menu()
-            )
-    else:
-        await message.answer(
-            "📋 <b>Главное меню</b>",
-            parse_mode="HTML",
-            reply_markup=await main_menu(user_id)
+    # КРИТИЧЕСКИ ВАЖНО: Используем get_main_menu_for_user из webhook_app для единообразия логики
+    # Это гарантирует правильное меню во время попыток автопродления
+    from webhook_app import get_main_menu_for_user
+    await message.answer(
+        "📋 <b>Главное меню</b>",
+        parse_mode="HTML",
+        reply_markup=await get_main_menu_for_user(user_id)
     )
 
 

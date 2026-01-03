@@ -36,13 +36,14 @@ BONUS_WEEK_END_DATE = datetime(2025, 1, 12, 23, 59, 59, tzinfo=timezone.utc)  # 
 dni_prazdnika = 3  # Длительность бонусной недели в минутах (3 минуты для теста)
 vremya_sms = 1  # Время уведомления до окончания в минутах (1 минута)
 
-# Фиксированное время начала бонусной недели для теста (устанавливается при первом импорте)
-_BONUS_WEEK_TEST_START = None
+# Фиксированное время начала бонусной недели для теста (устанавливается при импорте модуля)
+# КРИТИЧЕСКИ ВАЖНО: Устанавливаем при импорте, чтобы бонусная неделя начиналась с момента запуска сервиса
+_BONUS_WEEK_TEST_START = datetime.now(timezone.utc)
 
 def reset_bonus_week():
     """Сбрасывает начало бонусной недели (для тестирования)"""
     global _BONUS_WEEK_TEST_START
-    _BONUS_WEEK_TEST_START = None
+    _BONUS_WEEK_TEST_START = datetime.now(timezone.utc)
 
 # Для продакшена (после теста):
 # dni_prazdnika = 7 * 24 * 60  # 7 дней в минутах
@@ -64,11 +65,11 @@ def is_bonus_week_active() -> bool:
     USE_TEST_MODE = True  # True = тестовый режим (бонусная неделя начинается при первом обращении)
     
     if USE_TEST_MODE:
-        # Тестовый режим: бонусная неделя начинается с момента первого вызова и длится dni_prazdnika минут
+        # Тестовый режим: бонусная неделя начинается с момента запуска сервиса (при импорте модуля) и длится dni_prazdnika минут
         global _BONUS_WEEK_TEST_START
         now = datetime.now(timezone.utc)
         
-        # Если начало еще не установлено, устанавливаем его сейчас
+        # _BONUS_WEEK_TEST_START устанавливается при импорте модуля, но на всякий случай проверяем
         if _BONUS_WEEK_TEST_START is None:
             _BONUS_WEEK_TEST_START = now
         
@@ -84,6 +85,7 @@ def get_bonus_week_start() -> datetime:
     USE_TEST_MODE = True  # True = тестовый режим
     if USE_TEST_MODE:
         global _BONUS_WEEK_TEST_START
+        # _BONUS_WEEK_TEST_START устанавливается при импорте модуля, но на всякий случай проверяем
         if _BONUS_WEEK_TEST_START is None:
             _BONUS_WEEK_TEST_START = datetime.now(timezone.utc)
         return _BONUS_WEEK_TEST_START
