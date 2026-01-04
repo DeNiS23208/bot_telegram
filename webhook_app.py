@@ -120,7 +120,7 @@ async def startup_event():
 
 @app.post("/yandex-form/webhook")
 async def yandex_form_webhook(request: Request):
-    """Обрабатывает webhook от Яндекс.Формы при заполнении формы (JSON-RPC POST)"""
+    """Обрабатывает webhook от Яндекс.Формы при заполнении формы (JSON-RPC POST или обычный POST)"""
     try:
         data = await request.json()
         logger.info(f"📥 Получен webhook от Яндекс.Формы: {data}")
