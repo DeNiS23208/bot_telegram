@@ -337,25 +337,39 @@ async def yandex_form_webhook(request: Request):
                     logger.info(f"✅ Пользователь найден по email: {telegram_id}")
         
         # 3. Если не нашли по токену и email, используем последнего пользователя, который не заполнил форму
+        # И который создал форму недавно (за последние 10 минут)
         # Это временное решение, так как Яндекс.Формы не передает токен
         if not telegram_id:
             logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
-            logger.info("🔍 Пытаемся найти последнего пользователя, который не заполнил форму...")
+            logger.info("🔍 Пытаемся найти последнего пользователя, который не заполнил форму (за последние 10 минут)...")
+            from datetime import datetime, timedelta, timezone
+            ten_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
             async with aiosqlite.connect(DB_PATH) as db:
                 cursor = await db.execute(
-                    "SELECT telegram_id FROM users WHERE form_filled = 0 ORDER BY created_at DESC LIMIT 1",
+                    "SELECT telegram_id FROM users WHERE form_filled = 0 AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+                    (ten_minutes_ago,)
                 )
                 row = await cursor.fetchone()
                 if row:
                     telegram_id = row[0]
-                    logger.info(f"✅ Найден последний пользователь без заполненной формы: {telegram_id}")
+                    logger.info(f"✅ Найден последний пользователь без заполненной формы (за последние 10 минут): {telegram_id}")
                 else:
-                    logger.error("❌ Не найден ни один пользователь без заполненной формы")
-                    return {
-                        "jsonrpc": "2.0",
-                        "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
-                        "id": data.get("id") if isinstance(data, dict) else None
-                    }
+                    # Если не нашли за последние 10 минут, ищем просто последнего
+                    logger.info("🔍 Не найден пользователь за последние 10 минут, ищем последнего...")
+                    cursor = await db.execute(
+                        "SELECT telegram_id FROM users WHERE form_filled = 0 ORDER BY created_at DESC LIMIT 1",
+                    )
+                    row = await cursor.fetchone()
+                    if row:
+                        telegram_id = row[0]
+                        logger.info(f"✅ Найден последний пользователь без заполненной формы: {telegram_id}")
+                    else:
+                        logger.error("❌ Не найден ни один пользователь без заполненной формы")
+                        return {
+                            "jsonrpc": "2.0",
+                            "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
+                            "id": data.get("id") if isinstance(data, dict) else None
+                        }
         
         if not telegram_id:
             logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
