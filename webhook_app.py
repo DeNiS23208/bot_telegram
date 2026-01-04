@@ -1232,14 +1232,22 @@ async def check_bonus_week_transition_to_production():
                     auto_renewal_enabled = sub_info.get('auto_renewal_enabled', False)
                     saved_payment_method_id = sub_info.get('saved_payment_method_id')
                     
-                    # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено, проверяем, истекла ли подписка
-                    # и отправляем уведомление об истечении доступа, баним пользователя и отзываем ссылку
-                    if not auto_renewal_enabled or not saved_payment_method_id:
+                    # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено И нет сохраненного способа оплаты,
+                    # проверяем, истекла ли подписка и отправляем уведомление об истечении доступа, баним пользователя и отзываем ссылку
+                    # ВАЖНО: Это должно срабатывать ТОЛЬКО если автопродление действительно отключено,
+                    # а не просто если нет saved_payment_method_id (так как автопродление может быть включено, но попытка еще не выполнена)
+                    if not auto_renewal_enabled:
                         # Проверяем, истекла ли бонусная подписка
                         if expires_at and expires_at <= now:
                             # Подписка истекла - отправляем уведомление, баним и отзываем ссылку
-                            from db import get_subscription_expired_notified, set_subscription_expired_notified, get_invite_link
+                            from db import get_subscription_expired_notified, set_subscription_expired_notified, get_invite_link, get_auto_renewal_attempts
                             already_notified = await get_subscription_expired_notified(telegram_id)
+                            
+                            # КРИТИЧЕСКИ ВАЖНО: Проверяем, не идут ли попытки автопродления
+                            # Если идут попытки, не отправляем это уведомление (оно будет отправлено в attempt_auto_renewal)
+                            attempts_check = await get_auto_renewal_attempts(telegram_id)
+                            # Если автопродление включено, но попытки еще не начались или уже завершены, не отправляем уведомление здесь
+                            # Уведомление отправляется только если автопродление отключено
                             
                             if not already_notified:
                                 # Получаем продакшн меню с "Оплатить доступ"
