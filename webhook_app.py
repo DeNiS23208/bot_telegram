@@ -129,19 +129,30 @@ async def yandex_form_webhook(request: Request):
         logger.info(f"📥 Headers: {dict(request.headers)}")
         
         # Пытаемся получить данные
+        data = None
         try:
             data = await request.json()
-            logger.info(f"📥 Получен webhook от Яндекс.Формы: {data}")
+            logger.info(f"📥 Получен webhook от Яндекс.Формы (JSON): {data}")
         except Exception as json_error:
-            # Если не JSON, пытаемся прочитать как текст
+            # Если не JSON, пытаемся прочитать как текст и распарсить вручную
             body = await request.body()
-            logger.warning(f"⚠️ Не удалось распарсить JSON: {json_error}")
-            logger.info(f"📥 Тело запроса (raw): {body.decode('utf-8', errors='ignore')[:500]}")
-            return {
-                "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": f"Ошибка парсинга JSON: {json_error}"},
-                "id": None
-            }
+            body_str = body.decode('utf-8', errors='ignore')
+            logger.warning(f"⚠️ Не удалось распарсить JSON автоматически: {json_error}")
+            logger.info(f"📥 Тело запроса (raw): {body_str[:500]}")
+            
+            # Пытаемся распарсить вручную
+            try:
+                import json
+                data = json.loads(body_str)
+                logger.info(f"📥 Успешно распарсено вручную: {data}")
+            except Exception as parse_error:
+                logger.error(f"❌ Не удалось распарсить JSON вручную: {parse_error}")
+                # Возвращаем успешный ответ, чтобы Яндекс.Формы не повторяла запрос
+                return {
+                    "jsonrpc": "2.0",
+                    "result": {"success": False, "message": f"Ошибка парсинга JSON: {parse_error}"},
+                    "id": None
+                }
         
         # Яндекс.Формы отправляют JSON-RPC запрос
         # Структура: {"jsonrpc": "2.0", "method": "...", "params": {...}, "id": ...}
@@ -265,7 +276,12 @@ async def yandex_form_webhook(request: Request):
                         pass
             else:
                 # Если не JSON-RPC, данные в корне
-                answers = data.get("answers", data)
+                # Если data - это уже объект answers (когда в теле запроса просто {{answers}})
+                if "answers" in data:
+                    answers = data.get("answers", {})
+                else:
+                    # Если data - это сам объект answers (без обертки)
+                    answers = data
             
             # Извлекаем поля формы
             if isinstance(answers, dict):
