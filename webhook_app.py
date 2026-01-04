@@ -442,11 +442,12 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     if bonus_week_end.tzinfo is None:
         bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
     
-    # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, но еще идут попытки автопродления (attempts < 3),
-    # меню НЕ должно меняться - оно должно оставаться бонусным до завершения всех попыток
+    # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, но еще идут попытки автопродления (attempts > 0 и attempts < 3),
+    # меню НЕ должно меняться - оно должно оставаться прежним до завершения всех попыток
     bonus_week_ended = now > bonus_week_end
     attempts = await get_auto_renewal_attempts(telegram_id)
-    auto_renewal_in_progress = auto_renewal_enabled and attempts < 3 and bonus_week_ended
+    # auto_renewal_in_progress = True если автопродление включено, есть попытки (но меньше 3), и бонусная неделя закончилась
+    auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3 and bonus_week_ended
     
     # КРИТИЧЕСКИ ВАЖНО: Если автопродление успешно (attempts = 0 и есть активная подписка),
     # значит автопродление прошло успешно - показываем продакшн меню
