@@ -132,24 +132,44 @@ async def yandex_form_webhook(request: Request):
         # Пытаемся получить токен из разных мест
         token = None
         
-        # 1. СНАЧАЛА из query параметров URL (самый надежный способ)
+        # 1. СНАЧАЛА из query параметров URL
         token = request.query_params.get("token")
         
         # Проверяем, что токен не является шаблоном {{token}}
-        if token and token.strip() == "{{token}}":
-            logger.warning("⚠️ Получен шаблон {{token}} вместо реального токена - форма настроена неправильно")
+        if token and (token.strip() == "{{token}}" or token.strip() == "%7B%7Btoken%7D%7D"):
+            logger.warning("⚠️ Получен шаблон {{token}} в URL - Яндекс.Формы не поддерживает подстановку в URL для JSON-RPC")
             token = None
         
-        # 2. Из JSON-RPC params (если не нашли в URL)
+        # 2. Из JSON-RPC params (основной способ для JSON-RPC POST)
         if not token and isinstance(data, dict):
             if "params" in data:
                 params = data["params"]
                 # Пытаемся извлечь токен из params
                 if isinstance(params, dict):
-                    # Если params - это словарь
-                    token = params.get("token") or params.get("form_token")
+                    # Сначала проверяем, есть ли вложенный params с токеном (как строка JSON)
+                    if "params" in params:
+                        params_str = params.get("params", "")
+                        if isinstance(params_str, str):
+                            try:
+                                import json
+                                # Пытаемся распарсить строку JSON
+                                params_dict = json.loads(params_str)
+                                token = params_dict.get("token") or params_dict.get("form_token")
+                                logger.info(f"🔑 Извлечен токен из params.params (строка JSON): {token[:10]}..." if token else "❌ Токен не найден в params.params")
+                            except json.JSONDecodeError as e:
+                                logger.warning(f"⚠️ Не удалось распарсить params.params как JSON: {e}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ Ошибка при обработке params.params: {e}")
+                    
+                    # Если не нашли, ищем токен напрямую в params
+                    if not token:
+                        token = params.get("token") or params.get("form_token")
+                        if token:
+                            logger.info(f"🔑 Извлечен токен из params напрямую: {token[:10]}...")
+                    
                     # Проверяем, что токен не является шаблоном
                     if token and token.strip() == "{{token}}":
+                        logger.warning("⚠️ Получен шаблон {{token}} в params - Яндекс.Формы не заменил переменную")
                         token = None
                 elif isinstance(params, str):
                     # Если params - это строка JSON, пытаемся распарсить
@@ -157,11 +177,13 @@ async def yandex_form_webhook(request: Request):
                         import json
                         params_dict = json.loads(params)
                         token = params_dict.get("token") or params_dict.get("form_token")
+                        if token:
+                            logger.info(f"🔑 Извлечен токен из params (строка JSON): {token[:10]}...")
                         # Проверяем, что токен не является шаблоном
                         if token and token.strip() == "{{token}}":
                             token = None
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось распарсить params как JSON: {e}")
             
             # 3. Из корня JSON (если не JSON-RPC)
             if not token:
