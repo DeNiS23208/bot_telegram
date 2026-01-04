@@ -135,9 +135,9 @@ async def yandex_form_webhook(request: Request):
         # 1. СНАЧАЛА из query параметров URL
         token = request.query_params.get("token")
         
-        # Проверяем, что токен не является шаблоном {{token}}
-        if token and (token.strip() == "{{token}}" or token.strip() == "%7B%7Btoken%7D%7D"):
-            logger.warning("⚠️ Получен шаблон {{token}} в URL - Яндекс.Формы не поддерживает подстановку в URL для JSON-RPC")
+        # Проверяем, что токен не является шаблоном {{token}} или {{url.token}}
+        if token and (token.strip() in ["{{token}}", "{{url.token}}", "%7B%7Btoken%7D%7D", "%7B%7Burl.token%7D%7D"]):
+            logger.warning(f"⚠️ Получен шаблон {token} в URL - Яндекс.Формы не заменил переменную")
             token = None
         
         # 2. Из JSON-RPC params (основной способ для JSON-RPC POST)
@@ -185,12 +185,15 @@ async def yandex_form_webhook(request: Request):
                     except Exception as e:
                         logger.warning(f"⚠️ Не удалось распарсить params как JSON: {e}")
             
-            # 3. Из корня JSON (если не JSON-RPC)
+            # 3. Из корня JSON (если не JSON-RPC, обычный POST)
             if not token:
                 token = data.get("token") or data.get("form_token")
                 # Проверяем, что токен не является шаблоном
-                if token and token.strip() == "{{token}}":
+                if token and token.strip() in ["{{token}}", "{{url.token}}"]:
+                    logger.warning(f"⚠️ Получен шаблон {token} в теле запроса - Яндекс.Формы не заменил переменную")
                     token = None
+                elif token:
+                    logger.info(f"🔑 Извлечен токен из корня JSON: {token[:10]}...")
         
         if not token:
             logger.warning("⚠️ Токен не найден в webhook от Яндекс.Формы или является шаблоном {{token}}")
