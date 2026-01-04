@@ -135,6 +135,11 @@ async def yandex_form_webhook(request: Request):
         # 1. СНАЧАЛА из query параметров URL (самый надежный способ)
         token = request.query_params.get("token")
         
+        # Проверяем, что токен не является шаблоном {{token}}
+        if token and token.strip() == "{{token}}":
+            logger.warning("⚠️ Получен шаблон {{token}} вместо реального токена - форма настроена неправильно")
+            token = None
+        
         # 2. Из JSON-RPC params (если не нашли в URL)
         if not token and isinstance(data, dict):
             if "params" in data:
@@ -143,25 +148,35 @@ async def yandex_form_webhook(request: Request):
                 if isinstance(params, dict):
                     # Если params - это словарь
                     token = params.get("token") or params.get("form_token")
+                    # Проверяем, что токен не является шаблоном
+                    if token and token.strip() == "{{token}}":
+                        token = None
                 elif isinstance(params, str):
                     # Если params - это строка JSON, пытаемся распарсить
                     try:
                         import json
                         params_dict = json.loads(params)
                         token = params_dict.get("token") or params_dict.get("form_token")
+                        # Проверяем, что токен не является шаблоном
+                        if token and token.strip() == "{{token}}":
+                            token = None
                     except:
                         pass
             
             # 3. Из корня JSON (если не JSON-RPC)
             if not token:
                 token = data.get("token") or data.get("form_token")
+                # Проверяем, что токен не является шаблоном
+                if token and token.strip() == "{{token}}":
+                    token = None
         
         if not token:
-            logger.warning("⚠️ Токен не найден в webhook от Яндекс.Формы")
+            logger.warning("⚠️ Токен не найден в webhook от Яндекс.Формы или является шаблоном {{token}}")
+            logger.warning("⚠️ Убедитесь, что в настройках формы указан правильный URL: https://xasanim.ru/yandex-form/webhook?token={{token}}")
             # Возвращаем JSON-RPC ответ с ошибкой
             return {
                 "jsonrpc": "2.0",
-                "error": {"code": -32602, "message": "Токен не предоставлен"},
+                "error": {"code": -32602, "message": "Токен не предоставлен или форма настроена неправильно"},
                 "id": data.get("id") if isinstance(data, dict) else None
             }
         
@@ -203,22 +218,44 @@ async def yandex_form_webhook(request: Request):
                 if isinstance(params, dict):
                     # Если params - это словарь
                     answers = params.get("answers", {})
+                    
                     # Если answers - это строка, пытаемся распарсить
                     if isinstance(answers, str):
-                        try:
-                            import json
-                            answers = json.loads(answers)
-                        except:
-                            # Если не JSON, проверяем params.answers как ключ
+                        # Проверяем, не является ли это шаблоном {{answers}}
+                        if answers.strip() == "{{answers}}":
+                            # Если это шаблон, значит форма не настроена правильно
+                            # Пытаемся найти данные в других местах
+                            logger.warning("⚠️ Получен шаблон {{answers}} вместо данных - форма настроена неправильно")
+                            # Пытаемся найти данные в params.answers как ключ
                             if "params.answers" in params:
                                 answers_str = params.get("params.answers", "")
-                                try:
-                                    answers = json.loads(answers_str) if answers_str else {}
-                                except:
-                                    answers = {}
-                    # Если answers пустой, используем весь params
-                    if not answers:
-                        answers = params
+                                if answers_str and answers_str.strip() != "{{answers}}":
+                                    try:
+                                        import json
+                                        answers = json.loads(answers_str) if answers_str else {}
+                                    except:
+                                        answers = {}
+                            # Если не нашли, используем весь params (исключая служебные поля)
+                            if not answers or answers == {}:
+                                answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id"]}
+                        else:
+                            # Это не шаблон, пытаемся распарсить как JSON
+                            try:
+                                import json
+                                answers = json.loads(answers)
+                            except:
+                                # Если не JSON, проверяем params.answers как ключ
+                                if "params.answers" in params:
+                                    answers_str = params.get("params.answers", "")
+                                    if answers_str and answers_str.strip() != "{{answers}}":
+                                        try:
+                                            import json
+                                            answers = json.loads(answers_str) if answers_str else {}
+                                        except:
+                                            answers = {}
+                    # Если answers пустой, используем весь params (исключая служебные поля)
+                    if not answers or answers == {}:
+                        answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id"]}
                 elif isinstance(params, str):
                     # Если params - это строка JSON, пытаемся распарсить
                     try:
