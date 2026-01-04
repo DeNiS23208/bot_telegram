@@ -195,41 +195,7 @@ async def yandex_form_webhook(request: Request):
                 elif token:
                     logger.info(f"🔑 Извлечен токен из корня JSON: {token[:10]}...")
         
-        if not token:
-            logger.warning("⚠️ Токен не найден в webhook от Яндекс.Формы или является шаблоном {{token}}")
-            logger.warning("⚠️ Убедитесь, что в настройках формы указан правильный URL: https://xasanim.ru/yandex-form/webhook?token={{token}}")
-            # Возвращаем JSON-RPC ответ с ошибкой
-            return {
-                "jsonrpc": "2.0",
-                "error": {"code": -32602, "message": "Токен не предоставлен или форма настроена неправильно"},
-                "id": data.get("id") if isinstance(data, dict) else None
-            }
-        
-        # Используем функции из db.py
-        from db import get_user_by_form_token, mark_form_as_filled
-        
-        # Находим пользователя по токену
-        user_data = await get_user_by_form_token(token)
-        
-        if not user_data:
-            logger.warning(f"⚠️ Пользователь с токеном {token} не найден")
-            return {
-                "jsonrpc": "2.0",
-                "error": {"code": -32602, "message": "Пользователь не найден"},
-                "id": data.get("id") if isinstance(data, dict) else None
-            }
-        
-        telegram_id, form_filled = user_data
-        
-        if form_filled:
-            logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
-            return {
-                "jsonrpc": "2.0",
-                "result": {"success": True, "message": "Форма уже была заполнена ранее"},
-                "id": data.get("id") if isinstance(data, dict) else None
-            }
-        
-        # Извлекаем данные из формы
+        # Извлекаем данные из формы ДО поиска пользователя, чтобы использовать email для идентификации
         # Структура может быть разной в зависимости от настроек формы
         form_data = {}
         answers = {}
@@ -241,17 +207,12 @@ async def yandex_form_webhook(request: Request):
                 
                 # Пытаемся извлечь answers из params
                 if isinstance(params, dict):
-                    # Если params - это словарь
                     answers = params.get("answers", {})
                     
                     # Если answers - это строка, пытаемся распарсить
                     if isinstance(answers, str):
-                        # Проверяем, не является ли это шаблоном {{answers}}
                         if answers.strip() == "{{answers}}":
-                            # Если это шаблон, значит форма не настроена правильно
-                            # Пытаемся найти данные в других местах
                             logger.warning("⚠️ Получен шаблон {{answers}} вместо данных - форма настроена неправильно")
-                            # Пытаемся найти данные в params.answers как ключ
                             if "params.answers" in params:
                                 answers_str = params.get("params.answers", "")
                                 if answers_str and answers_str.strip() != "{{answers}}":
@@ -260,16 +221,13 @@ async def yandex_form_webhook(request: Request):
                                         answers = json.loads(answers_str) if answers_str else {}
                                     except:
                                         answers = {}
-                            # Если не нашли, используем весь params (исключая служебные поля)
                             if not answers or answers == {}:
                                 answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id"]}
                         else:
-                            # Это не шаблон, пытаемся распарсить как JSON
                             try:
                                 import json
                                 answers = json.loads(answers)
                             except:
-                                # Если не JSON, проверяем params.answers как ключ
                                 if "params.answers" in params:
                                     answers_str = params.get("params.answers", "")
                                     if answers_str and answers_str.strip() != "{{answers}}":
@@ -278,11 +236,9 @@ async def yandex_form_webhook(request: Request):
                                             answers = json.loads(answers_str) if answers_str else {}
                                         except:
                                             answers = {}
-                    # Если answers пустой, используем весь params (исключая служебные поля)
                     if not answers or answers == {}:
                         answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id"]}
                 elif isinstance(params, str):
-                    # Если params - это строка JSON, пытаемся распарсить
                     try:
                         import json
                         params_dict = json.loads(params)
@@ -293,8 +249,7 @@ async def yandex_form_webhook(request: Request):
                 # Если не JSON-RPC, данные в корне
                 answers = data.get("answers", data)
             
-            # Извлекаем поля формы (названия полей могут отличаться)
-            # Если answers - это словарь
+            # Извлекаем поля формы
             if isinstance(answers, dict):
                 form_data = {
                     "name": str(answers.get("name") or answers.get("имя") or "").strip(),
@@ -305,15 +260,58 @@ async def yandex_form_webhook(request: Request):
                     "activity": str(answers.get("activity") or answers.get("деятельность") or answers.get("направление деятельности") or "").strip()
                 }
             else:
-                # Если answers не словарь, создаем пустые значения
                 form_data = {
-                    "name": "",
-                    "phone": "",
-                    "email": "",
-                    "gender": "",
-                    "city": "",
-                    "activity": ""
+                    "name": "", "phone": "", "email": "", "gender": "", "city": "", "activity": ""
                 }
+        
+        # Используем функции из db.py
+        from db import get_user_by_form_token, mark_form_as_filled
+        
+        telegram_id = None
+        form_filled = False
+        
+        # 1. Пытаемся найти пользователя по токену (если токен есть и не является шаблоном)
+        if token:
+            user_data = await get_user_by_form_token(token)
+            if user_data:
+                telegram_id, form_filled = user_data
+                logger.info(f"✅ Пользователь найден по токену: {telegram_id}")
+        
+        # 2. Если не нашли по токену, пытаемся найти по email
+        if not telegram_id and form_data.get("email"):
+            email = form_data["email"]
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT telegram_id FROM form_data WHERE email = ? ORDER BY submitted_at DESC LIMIT 1",
+                    (email,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    telegram_id = row[0]
+                    # Проверяем, заполнена ли форма
+                    cursor = await db.execute(
+                        "SELECT form_filled FROM users WHERE telegram_id = ?",
+                        (telegram_id,)
+                    )
+                    row = await cursor.fetchone()
+                    form_filled = bool(row and row[0] == 1) if row else False
+                    logger.info(f"✅ Пользователь найден по email: {telegram_id}")
+        
+        if not telegram_id:
+            logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
+            return {
+                "jsonrpc": "2.0",
+                "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
+                "id": data.get("id") if isinstance(data, dict) else None
+            }
+        
+        if form_filled:
+            logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
+            return {
+                "jsonrpc": "2.0",
+                "result": {"success": True, "message": "Форма уже была заполнена ранее"},
+                "id": data.get("id") if isinstance(data, dict) else None
+            }
         
         # Сохраняем данные формы в БД
         async with aiosqlite.connect(DB_PATH) as db:
