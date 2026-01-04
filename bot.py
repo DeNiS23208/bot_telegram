@@ -1668,7 +1668,19 @@ async def cancel_subscription(message: Message):
     # Убеждаемся, что expires_at имеет timezone для сравнения
     expires_at = ensure_timezone_aware(expires_at)
     
-    if not expires_at or expires_at <= now:
+    # КРИТИЧЕСКИ ВАЖНО: Проверяем, включено ли автопродление и идут ли попытки
+    from db import is_auto_renewal_enabled, get_auto_renewal_attempts, reset_auto_renewal_attempts
+    auto_renewal_enabled = await is_auto_renewal_enabled(user_id)
+    attempts = await get_auto_renewal_attempts(user_id)
+    
+    # Проверяем, идут ли попытки автопродления
+    has_active_subscription = expires_at and expires_at > now
+    auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3
+    
+    # КРИТИЧЕСКИ ВАЖНО: Если подписка истекла, но идут попытки автопродления,
+    # все равно отключаем автопродление и сбрасываем попытки
+    if not has_active_subscription and not auto_renewal_in_progress:
+        # Нет активной подписки и нет попыток автопродления
         await message.answer(
             "ℹ️ <b>У вас нет активного доступа</b>\n\n"
             "Доступ уже неактивен или отсутствует.",
@@ -1680,11 +1692,19 @@ async def cancel_subscription(message: Message):
     # Отключаем автопродление И отвязываем карту
     await set_auto_renewal(user_id, False)
     
+    # КРИТИЧЕСКИ ВАЖНО: Сбрасываем счетчик попыток автопродления
+    if attempts > 0:
+        await reset_auto_renewal_attempts(user_id)
+    
     # ВАЖНО: Отвязываем карту (удаляем payment_method_id)
     card_removed = await delete_payment_method(user_id)
     
+    # Очищаем кэш для обновления меню
+    from db import _clear_cache
+    _clear_cache()
+    
     # Получаем информацию о подписке
-    expires_str = format_datetime_moscow(expires_at)
+    expires_str = format_datetime_moscow(expires_at) if expires_at else "неизвестно"
     
     # После отмены доступа показываем меню ТОЛЬКО с кнопкой "О проекте"
     # (без кнопки "Бонус в честь запуска")
