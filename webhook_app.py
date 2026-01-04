@@ -126,7 +126,13 @@ async def yandex_form_webhook(request: Request):
         logger.info(f"📥 Получен запрос на /yandex-form/webhook")
         logger.info(f"📥 URL: {request.url}")
         logger.info(f"📥 Query params: {request.query_params}")
-        logger.info(f"📥 Headers: {dict(request.headers)}")
+        headers_dict = dict(request.headers)
+        logger.info(f"📥 Headers: {headers_dict}")
+        
+        # Извлекаем form_answer_id из заголовков для идентификации
+        form_answer_id = headers_dict.get("x-form-answer-id") or headers_dict.get("X-Form-Answer-Id")
+        form_id = headers_dict.get("x-form-id") or headers_dict.get("X-Form-Id")
+        logger.info(f"📥 Form Answer ID: {form_answer_id}, Form ID: {form_id}")
         
         # Пытаемся получить данные
         data = None
@@ -329,6 +335,27 @@ async def yandex_form_webhook(request: Request):
                     row = await cursor.fetchone()
                     form_filled = bool(row and row[0] == 1) if row else False
                     logger.info(f"✅ Пользователь найден по email: {telegram_id}")
+        
+        # 3. Если не нашли по токену и email, используем последнего пользователя, который не заполнил форму
+        # Это временное решение, так как Яндекс.Формы не передает токен
+        if not telegram_id:
+            logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
+            logger.info("🔍 Пытаемся найти последнего пользователя, который не заполнил форму...")
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT telegram_id FROM users WHERE form_filled = 0 ORDER BY created_at DESC LIMIT 1",
+                )
+                row = await cursor.fetchone()
+                if row:
+                    telegram_id = row[0]
+                    logger.info(f"✅ Найден последний пользователь без заполненной формы: {telegram_id}")
+                else:
+                    logger.error("❌ Не найден ни один пользователь без заполненной формы")
+                    return {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
+                        "id": data.get("id") if isinstance(data, dict) else None
+                    }
         
         if not telegram_id:
             logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
