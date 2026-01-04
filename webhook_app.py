@@ -122,8 +122,26 @@ async def startup_event():
 async def yandex_form_webhook(request: Request):
     """Обрабатывает webhook от Яндекс.Формы при заполнении формы (JSON-RPC POST или обычный POST)"""
     try:
-        data = await request.json()
-        logger.info(f"📥 Получен webhook от Яндекс.Формы: {data}")
+        # Логируем все входящие запросы
+        logger.info(f"📥 Получен запрос на /yandex-form/webhook")
+        logger.info(f"📥 URL: {request.url}")
+        logger.info(f"📥 Query params: {request.query_params}")
+        logger.info(f"📥 Headers: {dict(request.headers)}")
+        
+        # Пытаемся получить данные
+        try:
+            data = await request.json()
+            logger.info(f"📥 Получен webhook от Яндекс.Формы: {data}")
+        except Exception as json_error:
+            # Если не JSON, пытаемся прочитать как текст
+            body = await request.body()
+            logger.warning(f"⚠️ Не удалось распарсить JSON: {json_error}")
+            logger.info(f"📥 Тело запроса (raw): {body.decode('utf-8', errors='ignore')[:500]}")
+            return {
+                "jsonrpc": "2.0",
+                "error": {"code": -32700, "message": f"Ошибка парсинга JSON: {json_error}"},
+                "id": None
+            }
         
         # Яндекс.Формы отправляют JSON-RPC запрос
         # Структура: {"jsonrpc": "2.0", "method": "...", "params": {...}, "id": ...}
