@@ -1200,12 +1200,12 @@ async def check_bonus_week_transition_to_production():
                     saved_payment_method_id = sub_info.get('saved_payment_method_id')
                     
                     # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено, проверяем, истекла ли подписка
-                    # и отправляем уведомление об истечении доступа
+                    # и отправляем уведомление об истечении доступа, баним пользователя и отзываем ссылку
                     if not auto_renewal_enabled or not saved_payment_method_id:
                         # Проверяем, истекла ли бонусная подписка
                         if expires_at and expires_at <= now:
-                            # Подписка истекла - отправляем уведомление
-                            from db import get_subscription_expired_notified, set_subscription_expired_notified
+                            # Подписка истекла - отправляем уведомление, баним и отзываем ссылку
+                            from db import get_subscription_expired_notified, set_subscription_expired_notified, get_invite_link
                             already_notified = await get_subscription_expired_notified(telegram_id)
                             
                             if not already_notified:
@@ -1225,9 +1225,26 @@ async def check_bonus_week_transition_to_production():
                                     reply_markup=menu
                                 )
                                 
+                                # Отзываем ссылку пользователя
+                                user_invite_link = await get_invite_link(telegram_id)
+                                if user_invite_link:
+                                    await revoke_invite_link(user_invite_link)
+                                    logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за истечения бонусной подписки (автопродление отключено)")
+                                
+                                # Баним пользователя в канале
+                                try:
+                                    await bot.ban_chat_member(
+                                        chat_id=CHANNEL_ID,
+                                        user_id=telegram_id,
+                                        until_date=None  # Бан навсегда
+                                    )
+                                    logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за истечения бонусной подписки (автопродление отключено)")
+                                except Exception as ban_error:
+                                    logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                                
                                 # Помечаем, что уведомление отправлено
                                 await set_subscription_expired_notified(telegram_id, True)
-                                logger.info(f"📧 Отправлено уведомление об истечении бонусной подписки пользователю {telegram_id} (автопродление отключено)")
+                                logger.info(f"📧 Отправлено уведомление об истечении бонусной подписки пользователю {telegram_id} (автопродление отключено), пользователь забанен")
                         continue
                     
                     # Получаем информацию о попытках
