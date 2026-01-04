@@ -1199,7 +1199,35 @@ async def check_bonus_week_transition_to_production():
                     auto_renewal_enabled = sub_info.get('auto_renewal_enabled', False)
                     saved_payment_method_id = sub_info.get('saved_payment_method_id')
                     
+                    # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено, проверяем, истекла ли подписка
+                    # и отправляем уведомление об истечении доступа
                     if not auto_renewal_enabled or not saved_payment_method_id:
+                        # Проверяем, истекла ли бонусная подписка
+                        if expires_at and expires_at <= now:
+                            # Подписка истекла - отправляем уведомление
+                            from db import get_subscription_expired_notified, set_subscription_expired_notified
+                            already_notified = await get_subscription_expired_notified(telegram_id)
+                            
+                            if not already_notified:
+                                # Получаем продакшн меню с "Оплатить доступ"
+                                menu = await get_main_menu_for_user(telegram_id)
+                                
+                                # Отправляем уведомление об истечении доступа
+                                await safe_send_message(
+                                    bot=bot,
+                                    chat_id=telegram_id,
+                                    text=(
+                                        "⏰ <b>Ваш доступ истек</b>\n\n"
+                                        "Бонусная подписка закончилась.\n"
+                                        "Для продления доступа нажмите кнопку 💳 Получить доступ."
+                                    ),
+                                    parse_mode="HTML",
+                                    reply_markup=menu
+                                )
+                                
+                                # Помечаем, что уведомление отправлено
+                                await set_subscription_expired_notified(telegram_id, True)
+                                logger.info(f"📧 Отправлено уведомление об истечении бонусной подписки пользователю {telegram_id} (автопродление отключено)")
                         continue
                     
                     # Получаем информацию о попытках
