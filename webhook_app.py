@@ -236,37 +236,36 @@ async def yandex_form_webhook(request: Request):
                 
                 # Пытаемся извлечь answers из params
                 if isinstance(params, dict):
-                    answers = params.get("answers", {})
+                    # Пробуем найти answers или answer (на случай опечатки)
+                    answers = params.get("answers") or params.get("answer", {})
                     
                     # Если answers - это строка, пытаемся распарсить
                     if isinstance(answers, str):
-                        if answers.strip() == "{{answers}}":
-                            logger.warning("⚠️ Получен шаблон {{answers}} вместо данных - форма настроена неправильно")
-                            if "params.answers" in params:
-                                answers_str = params.get("params.answers", "")
-                                if answers_str and answers_str.strip() != "{{answers}}":
-                                    try:
-                                        import json
-                                        answers = json.loads(answers_str) if answers_str else {}
-                                    except:
-                                        answers = {}
-                            if not answers or answers == {}:
-                                answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id"]}
+                        if answers.strip() in ["{{answers}}", "{{answers}}"]:
+                            logger.warning("⚠️ Получен шаблон {{answers}} вместо данных - Яндекс.Формы не заменил переменную")
+                            # Если шаблон не заменен, используем все параметры кроме служебных
+                            answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
+                            # Если все еще пусто, используем весь params
+                            if not answers:
+                                answers = params
                         else:
+                            # Пытаемся распарсить как JSON
                             try:
                                 import json
                                 answers = json.loads(answers)
                             except:
-                                if "params.answers" in params:
-                                    answers_str = params.get("params.answers", "")
-                                    if answers_str and answers_str.strip() != "{{answers}}":
-                                        try:
-                                            import json
-                                            answers = json.loads(answers_str) if answers_str else {}
-                                        except:
-                                            answers = {}
+                                # Если не JSON, используем как есть или все params
+                                if not answers or answers == "":
+                                    answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
+                                    if not answers:
+                                        answers = params
+                    
+                    # Если answers пустой или это шаблон, используем все params (кроме служебных)
                     if not answers or answers == {}:
-                        answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id"]}
+                        answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
+                        # Если все еще пусто, используем весь params
+                        if not answers:
+                            answers = params
                 elif isinstance(params, str):
                     try:
                         import json
