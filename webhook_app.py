@@ -1083,16 +1083,6 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     reply_markup=menu
                 )
                 logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с меню 'Оплатить доступ' после первой неудачной попытки")
-                    await safe_send_message(
-                        bot=bot,
-                        chat_id=telegram_id,
-                        text=(
-                            "⚠️ <b>Автопродление не удалось</b>\n\n"
-                            "Не удалось списать средства с вашего способа оплаты."
-                        ),
-                        parse_mode="HTML",
-                        reply_markup=menu_during_attempts  # Отправляем меню, чтобы оно не менялось
-                    )
             
             logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, попытка {attempt_number}, статус: {refreshed_status}, insufficient_funds: {insufficient_funds}, attempts_after: {attempts_after_failure}")
             return False
