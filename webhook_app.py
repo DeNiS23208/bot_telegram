@@ -1024,7 +1024,9 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                 from db import _clear_cache
                 _clear_cache()
                 
-                # Получаем продакшн меню с "Оплатить доступ" ПЕРЕД отзывом ссылки
+                # КРИТИЧЕСКИ ВАЖНО: Меню НЕ должно меняться до завершения всех 3 попыток
+                # Используем текущее меню пользователя (которое определяется логикой auto_renewal_in_progress)
+                # Это меню будет "Управление доступом" + "О проекте" во время попыток автопродления
                 menu = await get_main_menu_for_user(telegram_id)
                 
                 # Отправляем уведомление о первой неудачной попытке
@@ -1095,7 +1097,8 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                 from db import _clear_cache
                 _clear_cache()
                 
-                # Получаем продакшн меню с "Оплатить доступ"
+                # КРИТИЧЕСКИ ВАЖНО: Меню НЕ должно меняться до завершения всех 3 попыток
+                # Используем текущее меню пользователя (которое определяется логикой auto_renewal_in_progress)
                 menu = await get_main_menu_for_user(telegram_id)
                 
                 # Отправляем уведомление о неудачной попытке
