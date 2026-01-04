@@ -1005,13 +1005,35 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
             except Exception as payment_check_error:
                 logger.warning(f"⚠️ Ошибка проверки деталей платежа {payment_id}: {payment_check_error}")
             
-            # КРИТИЧЕСКИ ВАЖНО: При первой же неудачной попытке (attempts_after_failure >= 1)
-            # отправляем уведомление, отзываем ссылку, баним и обновляем меню
-            # ИЗМЕНЕНО: Теперь баним сразу после первой неудачной попытки, а не после 3 попыток
-            logger.info(f"🔍 Проверка завершения попыток для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}")
-            if attempts_after_failure >= 1:
-                # Первая попытка неудачна - отправляем уведомление, отзываем ссылку, баним и обновляем меню
-                logger.info(f"🚨 ПЕРВАЯ ПОПЫТКА НЕУДАЧНА для пользователя {telegram_id}! Отправляем уведомление, отзываем ссылку и баним пользователя")
+            # КРИТИЧЕСКИ ВАЖНО: Определяем, является ли это бонусная подписка
+            # Для бонусных подписок - 3 попытки, для продакшн подписок - 1 попытка (бан сразу)
+            from db import get_subscription_info
+            from config import get_bonus_week_start, get_bonus_week_end
+            sub_info_check = await get_subscription_info(telegram_id)
+            is_bonus_subscription = False
+            if sub_info_check:
+                starts_at_check = sub_info_check.get('starts_at')
+                if starts_at_check:
+                    if starts_at_check.tzinfo is None:
+                        starts_at_check = starts_at_check.replace(tzinfo=timezone.utc)
+                    bonus_week_start_check = get_bonus_week_start()
+                    bonus_week_end_check = get_bonus_week_end()
+                    if bonus_week_start_check.tzinfo is None:
+                        bonus_week_start_check = bonus_week_start_check.replace(tzinfo=timezone.utc)
+                    if bonus_week_end_check.tzinfo is None:
+                        bonus_week_end_check = bonus_week_end_check.replace(tzinfo=timezone.utc)
+                    is_bonus_subscription = bonus_week_start_check <= starts_at_check <= bonus_week_end_check
+            
+            # Определяем порог для бана: для бонусных подписок - 3 попытки, для продакшн - 1 попытка
+            ban_threshold = 3 if is_bonus_subscription else 1
+            
+            logger.info(f"🔍 Проверка завершения попыток для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}, is_bonus={is_bonus_subscription}, ban_threshold={ban_threshold}")
+            if attempts_after_failure >= ban_threshold:
+                # Все попытки исчерпаны - отправляем уведомление, отзываем ссылку, баним и обновляем меню
+                if is_bonus_subscription:
+                    logger.info(f"🚨 ВСЕ 3 ПОПЫТКИ ЗАВЕРШЕНЫ для пользователя {telegram_id} (бонусная подписка)! Отправляем уведомление, отзываем ссылку и баним пользователя")
+                else:
+                    logger.info(f"🚨 ПЕРВАЯ ПОПЫТКА НЕУДАЧНА для пользователя {telegram_id} (продакшн подписка)! Отправляем уведомление, отзываем ссылку и баним пользователя")
                 from db import set_auto_renewal, get_invite_link
                 # revoke_invite_link определена в webhook_app.py, не нужно импортировать
                 
@@ -1071,18 +1093,29 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
                 
                 # Отправляем финальное сообщение об истечении доступа с обновленным меню
-                await safe_send_message(
-                    bot=bot,
-                    chat_id=telegram_id,
-                    text=(
+                if is_bonus_subscription:
+                    expired_text = (
+                        "⏰ <b>Ваш доступ истек</b>\n\n"
+                        "Все попытки автопродления не удались.\n"
+                        "Для возобновления доступа нажмите кнопку 💳 Получить доступ."
+                    )
+                    log_text = f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с меню 'Оплатить доступ' после 3 неудачных попыток (бонусная подписка)"
+                else:
+                    expired_text = (
                         "⏰ <b>Ваш доступ истек</b>\n\n"
                         "Автопродление не удалось.\n"
                         "Для возобновления доступа нажмите кнопку 💳 Получить доступ."
-                    ),
+                    )
+                    log_text = f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с меню 'Оплатить доступ' после первой неудачной попытки (продакшн подписка)"
+                
+                await safe_send_message(
+                    bot=bot,
+                    chat_id=telegram_id,
+                    text=expired_text,
                     parse_mode="HTML",
                     reply_markup=menu
                 )
-                logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с меню 'Оплатить доступ' после первой неудачной попытки")
+                logger.info(log_text)
             
             logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, попытка {attempt_number}, статус: {refreshed_status}, insufficient_funds: {insufficient_funds}, attempts_after: {attempts_after_failure}")
             return False
