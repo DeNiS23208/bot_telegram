@@ -30,6 +30,8 @@ from db import (
     delete_payment_method,
     is_user_allowed,
     get_invite_link,
+    is_form_filled,
+    get_or_create_form_token,
 )
 from utils import format_datetime_moscow
 from payments import create_payment, get_payment_status, get_payment_url
@@ -113,6 +115,7 @@ BTN_STATUS_1 = "📊 Статус доступа"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "🔍 Проверить оплату"
 BTN_SUPPORT = "💬 Поддержка"
+BTN_FILL_FORM = "📝 Заполнить данные"  # Кнопка для заполнения формы
 
 # Кнопки для бонусной недели
 BTN_BONUS_WEEK = "🎁 Бонус в честь запуска канала Наиля Хасанова"
@@ -188,6 +191,34 @@ async def send_typing_action(chat_id: int):
         await asyncio.sleep(0.5)  # Небольшая задержка для красивого эффекта
     except:
         pass
+
+
+async def check_form_filled_and_block(telegram_id: int, message: Message) -> bool:
+    """
+    Проверяет, заполнена ли форма. Если нет - отправляет сообщение с кнопкой и возвращает True (блокирует действие).
+    Если форма заполнена - возвращает False (разрешает действие).
+    """
+    form_filled = await is_form_filled(telegram_id)
+    if not form_filled:
+        # Получаем токен для формы
+        form_token = await get_or_create_form_token(telegram_id)
+        # Формируем ссылку на форму с токеном
+        form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
+        
+        # Создаем inline кнопку для перехода на форму
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        form_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Заполнить данные", url=form_url)]
+        ])
+        
+        await message.answer(
+            "📝 <b>Для продолжения заполните пожалуйста данные</b>\n\n"
+            "Пожалуйста, заполните форму, чтобы продолжить пользоваться ботом.",
+            parse_mode="HTML",
+            reply_markup=form_keyboard
+        )
+        return True  # Блокируем действие
+    return False  # Разрешаем действие
 
 
 @dp.message(Command("start"))
@@ -281,14 +312,14 @@ async def cmd_start(message: Message):
     else:
         # Обычный текст для продакшн режима
         welcome_text = (
-        "👋 <b>Добро пожаловать!</b>\n\n"
-        "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
-        "🎯 Здесь вы можете:\n"
-        "• Получить доступ к закрытому каналу\n"
+            "👋 <b>Добро пожаловать!</b>\n\n"
+            "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
+            "🎯 Здесь вы можете:\n"
+            "• Получить доступ к закрытому каналу\n"
             "• Управлять своим доступом\n"
-        "• Настроить автопродление\n\n"
-        "Выберите действие в меню ниже 👇"
-    )
+            "• Настроить автопродление\n\n"
+            "Выберите действие в меню ниже 👇"
+        )
     
     # Отправляем видео с текстом в caption (встроено в сообщение)
     video_sent = False
@@ -601,12 +632,36 @@ async def cmd_start(message: Message):
             parse_mode="HTML",
             reply_markup=await main_menu(message.from_user.id),
         )
-        return  # Важно: прерываем выполнение, чтобы не было дублирования
+    
+    # Проверяем, заполнена ли форма
+    form_filled = await is_form_filled(message.from_user.id)
+    if not form_filled:
+        # Получаем токен для формы
+        form_token = await get_or_create_form_token(message.from_user.id)
+        # Формируем ссылку на форму с токеном
+        form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
+        
+        # Создаем inline кнопку для перехода на форму
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        form_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Заполнить данные", url=form_url)]
+        ])
+        
+        await message.answer(
+            "📝 <b>Для продолжения необходимо заполнить данные</b>\n\n"
+            "Пожалуйста, заполните форму, чтобы продолжить пользоваться ботом.",
+            parse_mode="HTML",
+            reply_markup=form_keyboard
+        )
 
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_STATUS_1)
 async def sub_status(message: Message):
     await send_typing_action(message.chat.id)
+    
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
     
     expires_at = await get_subscription_expires_at(message.from_user.id)
     
@@ -660,6 +715,10 @@ async def sub_status(message: Message):
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_ABOUT_1)
 async def about(message: Message):
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     # КРИТИЧЕСКИ ВАЖНО: Используем get_main_menu_for_user из webhook_app, чтобы меню было таким же,
     # как после оплаты. Это гарантирует, что меню не изменится при нажатии "О проекте"
     from webhook_app import get_main_menu_for_user
@@ -683,6 +742,10 @@ async def about(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_BONUS_WEEK)
 async def bonus_week_info(message: Message):
     """Обработчик кнопки 'Бонус в честь запуск канала Наиля Хасанова'"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await ensure_user(message.from_user.id, message.from_user.username)
     await send_typing_action(message.chat.id)
     
@@ -1009,6 +1072,10 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
 # Обработчик для кнопки "Получить доступ" (когда нет подписки)
 @dp.message(lambda m: (m.text or "").strip() == BTN_PAY_1)
 async def pay(message: Message):
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await ensure_user(message.from_user.id, message.from_user.username)
     await send_typing_action(message.chat.id)
 
@@ -1123,6 +1190,10 @@ async def pay(message: Message):
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_CHECK_1)
 async def check_payment(message: Message):
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await send_typing_action(message.chat.id)
     
     payment_id = await get_latest_payment_id(message.from_user.id)
@@ -1208,6 +1279,10 @@ async def check_payment(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_SUPPORT)
 async def support(message: Message):
     """Обработчик кнопки поддержки"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await send_typing_action(message.chat.id)
     
     await message.answer(
@@ -1293,6 +1368,10 @@ async def cmd_send_miniapp_to_channel(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_MANAGE_SUB)
 async def manage_subscription(message: Message):
     """Обработчик кнопки управления доступом - показывает меню с кнопкой отмены"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
@@ -1551,6 +1630,10 @@ async def manage_subscription(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == "◀️ Назад в меню" or (m.text or "").strip() == BTN_BACK_TO_MENU)
 async def back_to_main_menu(message: Message):
     """Возврат в главное меню"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     # КРИТИЧЕСКИ ВАЖНО: Используем get_main_menu_for_user из webhook_app для единообразия логики
     # Это гарантирует правильное меню во время попыток автопродления
@@ -1566,6 +1649,10 @@ async def back_to_main_menu(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_DISABLE_AUTO_RENEWAL)
 async def disable_auto_renewal_bonus_week(message: Message):
     """Отключение автопродления в бонусной неделе"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
@@ -1657,6 +1744,10 @@ async def disable_auto_renewal_bonus_week(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_CANCEL_SUB)
 async def cancel_subscription(message: Message):
     """Обработчик кнопки отмены доступа - отключает автопродление и удаляет способ оплаты"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
@@ -1752,6 +1843,10 @@ async def cancel_subscription(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_RESUME_SUB)
 async def resume_subscription(message: Message):
     """Обработчик кнопки возобновления доступа - включает автопродление обратно"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     

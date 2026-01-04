@@ -82,6 +82,32 @@ async def init_db() -> None:
         except Exception:
             pass
         
+        # Добавляем колонки для работы с формой заполнения данных
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN form_token TEXT")
+            await db.commit()
+        except Exception:
+            pass
+        
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN form_filled INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+        
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN form_filled_at TEXT")
+            await db.commit()
+        except Exception:
+            pass
+        
+        # Создаем индекс для быстрого поиска по токену
+        try:
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_form_token ON users(form_token)")
+            await db.commit()
+        except Exception:
+            pass
+        
         await db.execute("""
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,10 +137,47 @@ async def ensure_user(telegram_id: int, username: Optional[str]) -> None:
         return
     
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
-            (telegram_id, username, datetime.utcnow().isoformat())
+        # Проверяем, существует ли пользователь
+        cursor = await db.execute(
+            "SELECT telegram_id FROM users WHERE telegram_id = ?",
+            (telegram_id,)
         )
+        exists = await cursor.fetchone()
+        
+        if not exists:
+            # Создаем нового пользователя
+            # Генерируем токен для формы
+            import secrets
+            import hashlib
+            token_data = f"{telegram_id}_{secrets.token_urlsafe(32)}"
+            form_token = hashlib.sha256(token_data.encode()).hexdigest()[:32]
+            
+            await db.execute(
+                "INSERT INTO users (telegram_id, username, created_at, form_token, form_filled) VALUES (?, ?, ?, ?, 0)",
+                (telegram_id, username, datetime.utcnow().isoformat(), form_token)
+            )
+        else:
+            # Обновляем username если изменился
+            await db.execute(
+                "UPDATE users SET username = ? WHERE telegram_id = ?",
+                (username, telegram_id)
+            )
+            # Если у пользователя нет токена, создаем его
+            cursor = await db.execute(
+                "SELECT form_token FROM users WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            row = await cursor.fetchone()
+            if not row or not row[0]:
+                import secrets
+                import hashlib
+                token_data = f"{telegram_id}_{secrets.token_urlsafe(32)}"
+                form_token = hashlib.sha256(token_data.encode()).hexdigest()[:32]
+                await db.execute(
+                    "UPDATE users SET form_token = ? WHERE telegram_id = ?",
+                    (form_token, telegram_id)
+                )
+        
         await db.commit()
     _set_cached(cache_key, True)
 
@@ -604,4 +667,85 @@ async def cleanup_old_data():
     total_deleted += await cleanup_old_processed_payments(days=90)
     logger.info(f"✅ Очистка завершена, удалено {total_deleted} записей")
     return total_deleted
+
+
+# ==================== Функции для работы с формой заполнения данных ====================
+
+import secrets
+import hashlib
+
+
+async def get_or_create_form_token(telegram_id: int) -> str:
+    """Получает существующий токен формы или создает новый для пользователя"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Проверяем, есть ли уже токен
+        cursor = await db.execute(
+            "SELECT form_token FROM users WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if row and row[0]:
+            return row[0]
+        
+        # Генерируем новый уникальный токен
+        # Используем комбинацию telegram_id и случайной строки для уникальности
+        token_data = f"{telegram_id}_{secrets.token_urlsafe(32)}"
+        token = hashlib.sha256(token_data.encode()).hexdigest()[:32]
+        
+        # Сохраняем токен
+        await db.execute(
+            "UPDATE users SET form_token = ? WHERE telegram_id = ?",
+            (token, telegram_id)
+        )
+        await db.commit()
+        
+        _clear_cache()  # Очищаем кэш
+        return token
+
+
+async def is_form_filled(telegram_id: int) -> bool:
+    """Проверяет, заполнена ли форма пользователем"""
+    cache_key = f"form_filled_{telegram_id}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT form_filled FROM users WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cursor.fetchone()
+        
+        result = bool(row and row[0] == 1) if row else False
+        _set_cached(cache_key, result)
+        return result
+
+
+async def get_user_by_form_token(token: str) -> Optional[tuple[int, bool]]:
+    """Находит пользователя по токену формы. Возвращает (telegram_id, form_filled) или None"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT telegram_id, form_filled FROM users WHERE form_token = ?",
+            (token,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        return (row[0], bool(row[1] == 1))
+
+
+async def mark_form_as_filled(telegram_id: int) -> None:
+    """Отмечает форму как заполненную для пользователя"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET form_filled = 1, form_filled_at = ? WHERE telegram_id = ?",
+            (datetime.utcnow().isoformat(), telegram_id)
+        )
+        await db.commit()
+        
+        _clear_cache()  # Очищаем кэш
 
