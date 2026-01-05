@@ -1545,10 +1545,11 @@ async def check_bonus_week_transition_to_production():
                     should_attempt = False
                     attempt_number = 0
                     
-                    if 0 <= time_since_bonus_end <= 3 and attempts == 0:
-                        # Первая попытка: сразу после окончания бонусной недели
+                    if 0 <= time_since_bonus_end <= 10 and attempts == 0:
+                        # Первая попытка: сразу после окончания бонусной недели (в течение 10 минут)
                         should_attempt = True
                         attempt_number = 1
+                        logger.info(f"🔄 Первая попытка автопродления для пользователя {telegram_id} (прошло {time_since_bonus_end:.1f} минут с окончания бонусной недели)")
                     elif attempts > 0 and attempts < 3:
                         # Проверяем, прошло ли 1 минута с последней попытки
                         if last_attempt_at:
