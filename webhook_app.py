@@ -122,41 +122,64 @@ async def startup_event():
 async def yandex_form_webhook(request: Request):
     """Обрабатывает webhook от Яндекс.Формы при заполнении формы (JSON-RPC POST или обычный POST)"""
     try:
-        # Логируем все входящие запросы
+        # Логируем все входящие запросы с детальной информацией
         logger.info(f"📥 Получен запрос на /yandex-form/webhook")
         logger.info(f"📥 URL: {request.url}")
         logger.info(f"📥 Query params: {request.query_params}")
         headers_dict = dict(request.headers)
         logger.info(f"📥 Headers: {headers_dict}")
+        logger.info(f"📥 User-Agent: {headers_dict.get('user-agent', 'не указан')}")
+        logger.info(f"📥 Content-Type: {headers_dict.get('content-type', 'не указан')}")
         
         # Извлекаем form_answer_id из заголовков для идентификации
         form_answer_id = headers_dict.get("x-form-answer-id") or headers_dict.get("X-Form-Answer-Id")
         form_id = headers_dict.get("x-form-id") or headers_dict.get("X-Form-Id")
         logger.info(f"📥 Form Answer ID: {form_answer_id}, Form ID: {form_id}")
         
-        # Пытаемся получить данные
+        # Пытаемся получить данные - обрабатываем разные форматы запросов
         data = None
+        body_str = None
+        
+        # Сначала читаем тело запроса
         try:
-            data = await request.json()
-            logger.info(f"📥 Получен webhook от Яндекс.Формы (JSON): {data}")
-        except Exception as json_error:
-            # Если не JSON, пытаемся прочитать как текст и распарсить вручную
             body = await request.body()
             body_str = body.decode('utf-8', errors='ignore')
-            logger.warning(f"⚠️ Не удалось распарсить JSON автоматически: {json_error}")
-            logger.info(f"📥 Тело запроса (raw): {body_str[:500]}")
-            
-            # Пытаемся распарсить вручную
-            try:
+            logger.info(f"📥 Тело запроса (raw, первые 500 символов): {body_str[:500]}")
+        except Exception as body_error:
+            logger.warning(f"⚠️ Ошибка чтения тела запроса: {body_error}")
+        
+        # Пытаемся распарсить как JSON
+        try:
+            if body_str:
                 import json
                 data = json.loads(body_str)
-                logger.info(f"📥 Успешно распарсено вручную: {data}")
-            except Exception as parse_error:
-                logger.error(f"❌ Не удалось распарсить JSON вручную: {parse_error}")
-                # Возвращаем успешный ответ, чтобы Яндекс.Формы не повторяла запрос
+                logger.info(f"📥 Получен webhook от Яндекс.Формы (JSON из body): {data}")
+            else:
+                # Если body пустой, пытаемся получить через request.json()
+                data = await request.json()
+                logger.info(f"📥 Получен webhook от Яндекс.Формы (JSON через request.json()): {data}")
+        except Exception as json_error:
+            logger.warning(f"⚠️ Не удалось распарсить JSON автоматически: {json_error}")
+            
+            # Пытаемся распарсить вручную из body_str
+            if body_str:
+                try:
+                    import json
+                    data = json.loads(body_str)
+                    logger.info(f"📥 Успешно распарсено вручную из body_str: {data}")
+                except Exception as parse_error:
+                    logger.error(f"❌ Не удалось распарсить JSON вручную: {parse_error}")
+                    # Возвращаем успешный ответ, чтобы Яндекс.Формы не повторяла запрос
+                    return {
+                        "jsonrpc": "2.0",
+                        "result": {"success": False, "message": f"Ошибка парсинга JSON: {parse_error}"},
+                        "id": None
+                    }
+            else:
+                logger.error(f"❌ Тело запроса пустое, не удалось получить данные")
                 return {
                     "jsonrpc": "2.0",
-                    "result": {"success": False, "message": f"Ошибка парсинга JSON: {parse_error}"},
+                    "result": {"success": False, "message": "Тело запроса пустое"},
                     "id": None
                 }
         
@@ -1248,10 +1271,28 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
             
             logger.info(f"🔍 Проверка завершения попыток для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}, ban_threshold={ban_threshold}, max_attempts={max_attempts}")
             
-            # После первой неудачной попытки - бан и отзыв ссылки (но попытки продолжаются)
+            # После первой неудачной попытки - СРАЗУ бан и отзыв ссылки (но попытки продолжаются)
             if attempts_after_failure >= ban_threshold:
-                # Первая неудачная попытка - бан и отзыв ссылки (но попытки продолжаются)
-                logger.info(f"🚨 ПЕРВАЯ НЕУДАЧНАЯ ПОПЫТКА для пользователя {telegram_id}! Бан и отзыв ссылки, но попытки продолжаются до {max_attempts}")
+                # Первая неудачная попытка - СРАЗУ бан и отзыв ссылки (но попытки продолжаются)
+                logger.info(f"🚨 ПЕРВАЯ НЕУДАЧНАЯ ПОПЫТКА для пользователя {telegram_id}! СРАЗУ бан и отзыв ссылки, но попытки продолжаются до {max_attempts}")
+                
+                # СРАЗУ баним пользователя и отзываем ссылку
+                from db import get_invite_link
+                user_invite_link = await get_invite_link(telegram_id)
+                if user_invite_link:
+                    await revoke_invite_link(user_invite_link)
+                    logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана СРАЗУ после первой неудачной попытки")
+                
+                # Баним пользователя в канале СРАЗУ
+                try:
+                    await bot.ban_chat_member(
+                        chat_id=CHANNEL_ID,
+                        user_id=telegram_id,
+                        until_date=None  # Бан навсегда
+                    )
+                    logger.info(f"✅ Пользователь {telegram_id} забанен СРАЗУ после первой неудачной попытки автопродления")
+                except Exception as ban_error:
+                    logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
                 from db import get_invite_link
                 # revoke_invite_link определена в webhook_app.py, не нужно импортировать
                 
@@ -1277,23 +1318,6 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     reply_markup=menu
                 )
                 logger.info(f"📧 Отправлено уведомление о неудачной попытке пользователю {telegram_id} (попытка {attempt_number} из {max_attempts})")
-                
-                # Отзываем ссылку пользователя ПОСЛЕ отправки уведомления
-                user_invite_link = await get_invite_link(telegram_id)
-                if user_invite_link:
-                    await revoke_invite_link(user_invite_link)
-                    logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за первой неудачной попытки автопродления")
-                
-                # Баним пользователя в канале ПОСЛЕ отзыва ссылки
-                try:
-                    await bot.ban_chat_member(
-                        chat_id=CHANNEL_ID,
-                        user_id=telegram_id,
-                        until_date=None  # Бан навсегда
-                    )
-                    logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за первой неудачной попытки автопродления")
-                except Exception as ban_error:
-                    logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
             
             # Для попыток 2 и 3 (если они тоже неудачны) - отправляем уведомление, но без бана (бан уже был после первой попытки)
             elif attempts_after_failure > ban_threshold and attempts_after_failure < max_attempts:
