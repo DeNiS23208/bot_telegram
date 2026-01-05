@@ -120,49 +120,275 @@ async def startup_event():
 
 @app.post("/yandex-form/webhook")
 async def yandex_form_webhook(request: Request):
-    """Обрабатывает webhook от Яндекс.Формы при заполнении формы"""
+    """Обрабатывает webhook от Яндекс.Формы при заполнении формы (JSON-RPC POST или обычный POST)"""
     try:
-        data = await request.json()
-        logger.info(f"📥 Получен webhook от Яндекс.Формы: {data}")
+        # Логируем все входящие запросы
+        logger.info(f"📥 Получен запрос на /yandex-form/webhook")
+        logger.info(f"📥 URL: {request.url}")
+        logger.info(f"📥 Query params: {request.query_params}")
+        headers_dict = dict(request.headers)
+        logger.info(f"📥 Headers: {headers_dict}")
         
-        # Получаем токен из данных (будет передаваться через URL параметр или в теле запроса)
-        token = data.get("token")
-        if not token:
-            # Пытаемся получить из query параметров
-            token = request.query_params.get("token")
+        # Извлекаем form_answer_id из заголовков для идентификации
+        form_answer_id = headers_dict.get("x-form-answer-id") or headers_dict.get("X-Form-Answer-Id")
+        form_id = headers_dict.get("x-form-id") or headers_dict.get("X-Form-Id")
+        logger.info(f"📥 Form Answer ID: {form_answer_id}, Form ID: {form_id}")
         
-        if not token:
-            logger.warning("⚠️ Токен не найден в webhook от Яндекс.Формы")
-            return {"success": False, "message": "Токен не предоставлен"}
+        # Пытаемся получить данные
+        data = None
+        try:
+            data = await request.json()
+            logger.info(f"📥 Получен webhook от Яндекс.Формы (JSON): {data}")
+        except Exception as json_error:
+            # Если не JSON, пытаемся прочитать как текст и распарсить вручную
+            body = await request.body()
+            body_str = body.decode('utf-8', errors='ignore')
+            logger.warning(f"⚠️ Не удалось распарсить JSON автоматически: {json_error}")
+            logger.info(f"📥 Тело запроса (raw): {body_str[:500]}")
+            
+            # Пытаемся распарсить вручную
+            try:
+                import json
+                data = json.loads(body_str)
+                logger.info(f"📥 Успешно распарсено вручную: {data}")
+            except Exception as parse_error:
+                logger.error(f"❌ Не удалось распарсить JSON вручную: {parse_error}")
+                # Возвращаем успешный ответ, чтобы Яндекс.Формы не повторяла запрос
+                return {
+                    "jsonrpc": "2.0",
+                    "result": {"success": False, "message": f"Ошибка парсинга JSON: {parse_error}"},
+                    "id": None
+                }
         
-        # Находим пользователя по токену
+        # Яндекс.Формы отправляют JSON-RPC запрос
+        # Структура: {"jsonrpc": "2.0", "method": "...", "params": {...}, "id": ...}
+        # Или может быть обычный JSON с данными формы
+        
+        # Пытаемся получить токен из разных мест
+        token = None
+        
+        # 1. СНАЧАЛА из query параметров URL
+        token = request.query_params.get("token")
+        
+        # Проверяем, что токен не является шаблоном {{token}} или {{url.token}}
+        if token and (token.strip() in ["{{token}}", "{{url.token}}", "%7B%7Btoken%7D%7D", "%7B%7Burl.token%7D%7D"]):
+            logger.warning(f"⚠️ Получен шаблон {token} в URL - Яндекс.Формы не заменил переменную")
+            token = None
+        
+        # 2. Из JSON-RPC params (основной способ для JSON-RPC POST)
+        if not token and isinstance(data, dict):
+            if "params" in data:
+                params = data["params"]
+                # Пытаемся извлечь токен из params
+                if isinstance(params, dict):
+                    # Сначала проверяем, есть ли вложенный params с токеном (как строка JSON)
+                    if "params" in params:
+                        params_str = params.get("params", "")
+                        if isinstance(params_str, str):
+                            try:
+                                import json
+                                # Пытаемся распарсить строку JSON
+                                params_dict = json.loads(params_str)
+                                token = params_dict.get("token") or params_dict.get("form_token")
+                                logger.info(f"🔑 Извлечен токен из params.params (строка JSON): {token[:10]}..." if token else "❌ Токен не найден в params.params")
+                            except json.JSONDecodeError as e:
+                                logger.warning(f"⚠️ Не удалось распарсить params.params как JSON: {e}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ Ошибка при обработке params.params: {e}")
+                    
+                    # Если не нашли, ищем токен напрямую в params
+                    if not token:
+                        token = params.get("token") or params.get("form_token")
+                        if token:
+                            logger.info(f"🔑 Извлечен токен из params напрямую: {token[:10]}...")
+                    
+                    # Проверяем, что токен не является шаблоном
+                    if token and token.strip() == "{{token}}":
+                        logger.warning("⚠️ Получен шаблон {{token}} в params - Яндекс.Формы не заменил переменную")
+                        token = None
+                elif isinstance(params, str):
+                    # Если params - это строка JSON, пытаемся распарсить
+                    try:
+                        import json
+                        params_dict = json.loads(params)
+                        token = params_dict.get("token") or params_dict.get("form_token")
+                        if token:
+                            logger.info(f"🔑 Извлечен токен из params (строка JSON): {token[:10]}...")
+                        # Проверяем, что токен не является шаблоном
+                        if token and token.strip() == "{{token}}":
+                            token = None
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось распарсить params как JSON: {e}")
+            
+            # 3. Из корня JSON (если не JSON-RPC, обычный POST)
+            if not token:
+                token = data.get("token") or data.get("form_token")
+                # Проверяем, что токен не является шаблоном
+                if token and token.strip() in ["{{token}}", "{{url.token}}"]:
+                    logger.warning(f"⚠️ Получен шаблон {token} в теле запроса - Яндекс.Формы не заменил переменную")
+                    token = None
+                elif token:
+                    logger.info(f"🔑 Извлечен токен из корня JSON: {token[:10]}...")
+        
+        # Извлекаем данные из формы ДО поиска пользователя, чтобы использовать email для идентификации
+        # Структура может быть разной в зависимости от настроек формы
+        form_data = {}
+        answers = {}
+        
+        if isinstance(data, dict):
+            # Если это JSON-RPC, данные в params
+            if "params" in data:
+                params = data["params"]
+                
+                # Пытаемся извлечь answers из params
+                if isinstance(params, dict):
+                    # Пробуем найти answers или answer (на случай опечатки)
+                    answers = params.get("answers") or params.get("answer", {})
+                    
+                    # Если answers - это строка, пытаемся распарсить
+                    if isinstance(answers, str):
+                        if answers.strip() in ["{{answers}}", "{{answers}}"]:
+                            logger.warning("⚠️ Получен шаблон {{answers}} вместо данных - Яндекс.Формы не заменил переменную")
+                            # Если шаблон не заменен, используем все параметры кроме служебных
+                            answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
+                            # Если все еще пусто, используем весь params
+                            if not answers:
+                                answers = params
+                        else:
+                            # Пытаемся распарсить как JSON
+                            try:
+                                import json
+                                answers = json.loads(answers)
+                            except:
+                                # Если не JSON, используем как есть или все params
+                                if not answers or answers == "":
+                                    answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
+                                    if not answers:
+                                        answers = params
+                    
+                    # Если answers пустой или это шаблон, используем все params (кроме служебных)
+                    if not answers or answers == {}:
+                        answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
+                        # Если все еще пусто, используем весь params
+                        if not answers:
+                            answers = params
+                elif isinstance(params, str):
+                    try:
+                        import json
+                        params_dict = json.loads(params)
+                        answers = params_dict.get("answers", params_dict)
+                    except:
+                        pass
+            else:
+                # Если не JSON-RPC, данные в корне
+                # Если data - это уже объект answers (когда в теле запроса просто {{answers}})
+                if "answers" in data:
+                    answers = data.get("answers", {})
+                else:
+                    # Если data - это сам объект answers (без обертки)
+                    answers = data
+            
+            # Извлекаем поля формы
+            if isinstance(answers, dict):
+                form_data = {
+                    "name": str(answers.get("name") or answers.get("имя") or "").strip(),
+                    "phone": str(answers.get("phone") or answers.get("телефон") or "").strip(),
+                    "email": str(answers.get("email") or answers.get("почта") or "").strip(),
+                    "gender": str(answers.get("gender") or answers.get("пол") or "").strip(),
+                    "city": str(answers.get("city") or answers.get("город") or answers.get("город проживания") or "").strip(),
+                    "activity": str(answers.get("activity") or answers.get("деятельность") or answers.get("направление деятельности") or "").strip()
+                }
+            else:
+                form_data = {
+                    "name": "", "phone": "", "email": "", "gender": "", "city": "", "activity": ""
+                }
+        
+        # Используем функции из db.py
+        from db import get_user_by_form_token, mark_form_as_filled
+        
+        telegram_id = None
+        form_filled = False
+        
+        # 1. Пытаемся найти пользователя по токену (если токен есть и не является шаблоном)
+        if token:
+            user_data = await get_user_by_form_token(token)
+            if user_data:
+                telegram_id, form_filled = user_data
+                logger.info(f"✅ Пользователь найден по токену: {telegram_id}")
+        
+        # 2. Если не нашли по токену, пытаемся найти по email
+        if not telegram_id and form_data.get("email"):
+            email = form_data["email"]
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT telegram_id FROM form_data WHERE email = ? ORDER BY submitted_at DESC LIMIT 1",
+                    (email,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    telegram_id = row[0]
+                    # Проверяем, заполнена ли форма
+                    cursor = await db.execute(
+                        "SELECT form_filled FROM users WHERE telegram_id = ?",
+                        (telegram_id,)
+                    )
+                    row = await cursor.fetchone()
+                    form_filled = bool(row and row[0] == 1) if row else False
+                    logger.info(f"✅ Пользователь найден по email: {telegram_id}")
+        
+        # 3. Если не нашли по токену и email, используем последнего пользователя, который не заполнил форму
+        # И который создал форму недавно (за последние 10 минут)
+        # Это временное решение, так как Яндекс.Формы не передает токен
+        if not telegram_id:
+            logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
+            logger.info("🔍 Пытаемся найти последнего пользователя, который не заполнил форму (за последние 10 минут)...")
+            from datetime import datetime, timedelta, timezone
+            ten_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT telegram_id FROM users WHERE form_filled = 0 AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+                    (ten_minutes_ago,)
+                )
+                row = await cursor.fetchone()
+                if row:
+                    telegram_id = row[0]
+                    logger.info(f"✅ Найден последний пользователь без заполненной формы (за последние 10 минут): {telegram_id}")
+                else:
+                    # Если не нашли за последние 10 минут, ищем просто последнего
+                    logger.info("🔍 Не найден пользователь за последние 10 минут, ищем последнего...")
+                    cursor = await db.execute(
+                        "SELECT telegram_id FROM users WHERE form_filled = 0 ORDER BY created_at DESC LIMIT 1",
+                    )
+                    row = await cursor.fetchone()
+                    if row:
+                        telegram_id = row[0]
+                        logger.info(f"✅ Найден последний пользователь без заполненной формы: {telegram_id}")
+                    else:
+                        logger.error("❌ Не найден ни один пользователь без заполненной формы")
+                        return {
+                            "jsonrpc": "2.0",
+                            "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
+                            "id": data.get("id") if isinstance(data, dict) else None
+                        }
+        
+        if not telegram_id:
+            logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
+            return {
+                "jsonrpc": "2.0",
+                "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
+                "id": data.get("id") if isinstance(data, dict) else None
+            }
+        
+        if form_filled:
+            logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
+            return {
+                "jsonrpc": "2.0",
+                "result": {"success": True, "message": "Форма уже была заполнена ранее"},
+                "id": data.get("id") if isinstance(data, dict) else None
+            }
+        
+        # Сохраняем данные формы в БД
         async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                "SELECT telegram_id, form_filled FROM users WHERE form_token = ?",
-                (token,)
-            )
-            user = await cursor.fetchone()
-            
-            if not user:
-                logger.warning(f"⚠️ Пользователь с токеном {token} не найден")
-                return {"success": False, "message": "Пользователь не найден"}
-            
-            telegram_id = user[0]
-            form_filled = user[1]
-            
-            if form_filled == 1:
-                logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
-                return {"success": True, "message": "Форма уже была заполнена ранее"}
-            
-            # Получаем данные из формы
-            answers = data.get("answers", {})
-            name = answers.get("name", "").strip()
-            phone = answers.get("phone", "").strip()
-            email = answers.get("email", "").strip()
-            gender = answers.get("gender", "")
-            city = answers.get("city", "").strip()
-            activity = answers.get("activity", "").strip()
-            
             # Создаем таблицу для данных формы, если её нет
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS form_data (
@@ -185,48 +411,53 @@ async def yandex_form_webhook(request: Request):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 telegram_id,
-                name,
-                phone,
-                email,
-                gender,
-                city,
-                activity,
+                form_data.get("name", "").strip(),
+                form_data.get("phone", "").strip(),
+                form_data.get("email", "").strip(),
+                form_data.get("gender", "").strip(),
+                form_data.get("city", "").strip(),
+                form_data.get("activity", "").strip(),
                 datetime.now(timezone.utc).isoformat()
             ))
             
-            # Отмечаем форму как заполненную
-            await db.execute("""
-                UPDATE users 
-                SET form_filled = 1, form_filled_at = ?
-                WHERE telegram_id = ?
-            """, (datetime.now(timezone.utc).isoformat(), telegram_id))
-            
             await db.commit()
-            
-            logger.info(f"✅ Форма заполнена пользователем {telegram_id} через Яндекс.Форму")
-            
-            # Отправляем уведомление пользователю в бот
-            try:
-                await safe_send_message(
-                    bot=bot,
-                    chat_id=telegram_id,
-                    text=(
-                        "✅ <b>Отлично! Данные получены</b>\n\n"
-                        "Ваша форма успешно заполнена и обработана.\n"
-                        "Теперь вы можете пользоваться ботом. Выберите действие в меню 👇"
-                    ),
-                    parse_mode="HTML"
-                )
-            except Exception as notify_error:
-                logger.warning(f"⚠️ Не удалось отправить уведомление пользователю {telegram_id}: {notify_error}")
-            
-            return {"success": True, "message": "Данные успешно обработаны"}
+        
+        # Отмечаем форму как заполненную
+        await mark_form_as_filled(telegram_id)
+        
+        logger.info(f"✅ Форма заполнена пользователем {telegram_id} через Яндекс.Форму")
+        
+        # Отправляем уведомление пользователю в бот
+        try:
+            await safe_send_message(
+                bot=bot,
+                chat_id=telegram_id,
+                text=(
+                    "✅ <b>Отлично! Данные получены</b>\n\n"
+                    "Ваша форма успешно заполнена и обработана.\n"
+                    "Теперь вы можете пользоваться ботом. Выберите действие в меню 👇"
+                ),
+                parse_mode="HTML"
+            )
+        except Exception as notify_error:
+            logger.warning(f"⚠️ Не удалось отправить уведомление пользователю {telegram_id}: {notify_error}")
+        
+        # Возвращаем JSON-RPC ответ об успехе
+        return {
+            "jsonrpc": "2.0",
+            "result": {"success": True, "message": "Данные успешно обработаны"},
+            "id": data.get("id") if isinstance(data, dict) else None
+        }
             
     except Exception as e:
         logger.error(f"❌ Ошибка обработки webhook от Яндекс.Формы: {e}")
         import traceback
         traceback.print_exc()
-        return {"success": False, "message": "Произошла ошибка при обработке данных"}
+        return {
+            "jsonrpc": "2.0",
+            "error": {"code": -32603, "message": f"Произошла ошибка при обработке данных: {str(e)}"},
+            "id": None
+        }
 
 
 # Обработчик возврата с ЮKassa (если пользователь вернулся без оплаты)
@@ -442,11 +673,12 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     if bonus_week_end.tzinfo is None:
         bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
     
-    # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, но еще идут попытки автопродления (attempts < 3),
-    # меню НЕ должно меняться - оно должно оставаться бонусным до завершения всех попыток
+    # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, но еще идут попытки автопродления (attempts > 0 и attempts < 3),
+    # меню НЕ должно меняться - оно должно оставаться прежним до завершения всех попыток
     bonus_week_ended = now > bonus_week_end
     attempts = await get_auto_renewal_attempts(telegram_id)
-    auto_renewal_in_progress = auto_renewal_enabled and attempts < 3 and bonus_week_ended
+    # auto_renewal_in_progress = True если автопродление включено, есть попытки (но меньше 3), и бонусная неделя закончилась
+    auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3 and bonus_week_ended
     
     # КРИТИЧЕСКИ ВАЖНО: Если автопродление успешно (attempts = 0 и есть активная подписка),
     # значит автопродление прошло успешно - показываем продакшн меню
@@ -1005,62 +1237,50 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
             except Exception as payment_check_error:
                 logger.warning(f"⚠️ Ошибка проверки деталей платежа {payment_id}: {payment_check_error}")
             
-            # КРИТИЧЕСКИ ВАЖНО: Когда attempts_after_failure >= 3 (все 3 попытки неудачны)
-            # отправляем уведомление, отзываем ссылку, баним и обновляем меню
-            # ВАЖНО: Ссылка отзывается ТОЛЬКО после всех 3 попыток, а не во время них
-            # Проверяем attempts_after_failure >= 3, так как это гарантирует что все 3 попытки выполнены
-            logger.info(f"🔍 Проверка завершения попыток для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}")
-            if attempts_after_failure >= 3:
-                # Все 3 попытки неудачны - отправляем уведомление, отзываем ссылку, баним и обновляем меню
-                logger.info(f"🚨 ВСЕ 3 ПОПЫТКИ ЗАВЕРШЕНЫ для пользователя {telegram_id}! Отправляем уведомление, отзываем ссылку и баним пользователя")
-                from db import set_auto_renewal, get_invite_link
+            # КРИТИЧЕСКИ ВАЖНО: Для ВСЕХ подписок (бонусных и продакшн) - 3 попытки, но бан с первой неудачи
+            # После первой неудачной попытки - сразу бан и отзыв ссылки, но попытки продолжаются до 3-й
+            # После 3-й неудачной попытки - окончательное отключение автопродления
+            
+            ban_threshold = 1  # Бан после первой неудачной попытки
+            max_attempts = 3   # Максимум 3 попытки для всех подписок
+            
+            logger.info(f"🔍 Проверка завершения попыток для пользователя {telegram_id}: attempt_number={attempt_number}, attempts_after_failure={attempts_after_failure}, ban_threshold={ban_threshold}, max_attempts={max_attempts}")
+            
+            # После первой неудачной попытки - бан и отзыв ссылки (но попытки продолжаются)
+            if attempts_after_failure >= ban_threshold:
+                # Первая неудачная попытка - бан и отзыв ссылки (но попытки продолжаются)
+                logger.info(f"🚨 ПЕРВАЯ НЕУДАЧНАЯ ПОПЫТКА для пользователя {telegram_id}! Бан и отзыв ссылки, но попытки продолжаются до {max_attempts}")
+                from db import get_invite_link
                 # revoke_invite_link определена в webhook_app.py, не нужно импортировать
                 
-                await set_auto_renewal(telegram_id, False)
                 from db import _clear_cache
                 _clear_cache()
                 
-                # Получаем продакшн меню с "Оплатить доступ" ПЕРЕД отзывом ссылки
+                # КРИТИЧЕСКИ ВАЖНО: Меню НЕ должно меняться до завершения всех 3 попыток
+                # Используем текущее меню пользователя (которое определяется логикой auto_renewal_in_progress)
+                # Это меню будет "Управление доступом" + "О проекте" во время попыток автопродления
                 menu = await get_main_menu_for_user(telegram_id)
                 
-                # КРИТИЧЕСКИ ВАЖНО: Всегда отправляем уведомление на 3-й попытке
-                # Отправляем сообщение о недостаточности средств или ошибке С МЕНЮ
-                if insufficient_funds:
-                    await safe_send_message(
-                        bot=bot,
-                        chat_id=telegram_id,
-                        text=(
-                            "⚠️ <b>У вас недостаточно средств</b>\n\n"
-                            "На вашей карте недостаточно средств для автопродления подписки.\n"
-                            "Все попытки автопродления исчерпаны.\n\n"
-                            "Автопродление и доступ закрыты.\n\n"
-                            "Для возобновления доступа используйте кнопку 💳 Получить доступ."
-                        ),
-                        parse_mode="HTML",
-                        reply_markup=menu
-                    )
-                    logger.info(f"📧 Отправлено уведомление о недостаточности средств пользователю {telegram_id} С МЕНЮ на 3-й попытке")
-                else:
-                    await safe_send_message(
-                        bot=bot,
-                        chat_id=telegram_id,
-                        text=(
-                            "⚠️ <b>Автопродление не удалось</b>\n\n"
-                            "Не удалось списать средства с вашего способа оплаты.\n"
-                            "Все попытки автопродления исчерпаны.\n\n"
-                            "Автопродление автоматически отключено.\n\n"
-                            "Для продления доступа используйте кнопку 💳 Получить доступ."
-                        ),
-                        parse_mode="HTML",
-                        reply_markup=menu
-                    )
-                    logger.info(f"📧 Отправлено уведомление о неудачном автопродлении пользователю {telegram_id} С МЕНЮ на 3-й попытке")
+                # Отправляем уведомление о неудачной попытке
+                # КРИТИЧЕСКИ ВАЖНО: Используем attempt_number для правильного отображения номера попытки
+                await safe_send_message(
+                    bot=bot,
+                    chat_id=telegram_id,
+                    text=(
+                        "⚠️ На вашей карте недостаточно средств для автопродления подписки.\n\n"
+                        f"Попытка {attempt_number} из {max_attempts} не удалась. Продолжаем попытки автопродления.\n\n"
+                        "Для возобновления доступа используйте кнопку 💳 Получить доступ."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=menu
+                )
+                logger.info(f"📧 Отправлено уведомление о неудачной попытке пользователю {telegram_id} (попытка {attempt_number} из {max_attempts})")
                 
                 # Отзываем ссылку пользователя ПОСЛЕ отправки уведомления
                 user_invite_link = await get_invite_link(telegram_id)
                 if user_invite_link:
                     await revoke_invite_link(user_invite_link)
-                    logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за 3 неудачных попыток автопродления")
+                    logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за первой неудачной попытки автопродления")
                 
                 # Баним пользователя в канале ПОСЛЕ отзыва ссылки
                 try:
@@ -1069,51 +1289,76 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                         user_id=telegram_id,
                         until_date=None  # Бан навсегда
                     )
-                    logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за 3 неудачных попыток автопродления")
+                    logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за первой неудачной попытки автопродления")
                 except Exception as ban_error:
                     logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+            
+            # Для попыток 2 и 3 (если они тоже неудачны) - отправляем уведомление, но без бана (бан уже был после первой попытки)
+            elif attempts_after_failure > ban_threshold and attempts_after_failure < max_attempts:
+                logger.info(f"⚠️ Попытка {attempts_after_failure} из {max_attempts} неудачна для пользователя {telegram_id}. Отправляем уведомление (бан уже был после первой попытки)")
+                from db import _clear_cache
+                _clear_cache()
                 
-                # Отправляем финальное сообщение об истечении доступа с обновленным меню
+                # КРИТИЧЕСКИ ВАЖНО: Меню НЕ должно меняться до завершения всех 3 попыток
+                # Используем текущее меню пользователя (которое определяется логикой auto_renewal_in_progress)
+                menu = await get_main_menu_for_user(telegram_id)
+                
+                # Отправляем уведомление о неудачной попытке
+                # КРИТИЧЕСКИ ВАЖНО: Используем attempt_number для правильного отображения номера попытки
                 await safe_send_message(
                     bot=bot,
                     chat_id=telegram_id,
                     text=(
-                        "⏰ <b>Ваш доступ истек</b>\n\n"
-                        "Все попытки автопродления не удались.\n"
-                        "Для возобновления доступа нажмите кнопку 💳 Получить доступ."
+                        "⚠️ На вашей карте недостаточно средств для автопродления подписки.\n\n"
+                        f"Попытка {attempt_number} из {max_attempts} не удалась. Продолжаем попытки автопродления.\n\n"
+                        "Для возобновления доступа используйте кнопку 💳 Получить доступ."
                     ),
                     parse_mode="HTML",
                     reply_markup=menu
                 )
-                logger.info(f"📧 Отправлено уведомление об истечении доступа пользователю {telegram_id} с меню 'Оплатить доступ' после 3 попытки")
-            else:
-                # Еще не все попытки выполнены - отправляем уведомление С МЕНЮ "Управление доступом"
-                # КРИТИЧЕСКИ ВАЖНО: Отправляем меню, чтобы оно не переключалось на бонусное
-                menu_during_attempts = await get_main_menu_for_user(telegram_id)
+                logger.info(f"📧 Отправлено уведомление о неудачной попытке пользователю {telegram_id} (попытка {attempt_number} из {max_attempts})")
+            
+            # После 3-й неудачной попытки - окончательное отключение автопродления
+            if attempts_after_failure >= max_attempts:
+                logger.info(f"🚨 ВСЕ {max_attempts} ПОПЫТКИ ЗАВЕРШЕНЫ для пользователя {telegram_id}! Окончательное отключение автопродления")
+                from db import set_auto_renewal
+                
+                await set_auto_renewal(telegram_id, False)
+                from db import _clear_cache
+                _clear_cache()
+                
+                # Получаем продакшн меню с "Оплатить доступ"
+                menu = await get_main_menu_for_user(telegram_id)
+                
+                # Отправляем финальное уведомление об окончательном отключении автопродления
                 if insufficient_funds:
                     await safe_send_message(
                         bot=bot,
                         chat_id=telegram_id,
                         text=(
                             "⚠️ <b>У вас недостаточно средств</b>\n\n"
-                            "На вашей карте недостаточно средств для автопродления подписки.\n"
-                            "Пожалуйста пополните баланс для успешного автопродления"
+                            "На вашей карте недостаточно средств для автопродления подписки.\n\n"
+                            "Все попытки автопродления исчерпаны. Автопродление отключено.\n\n"
+                            "Для возобновления доступа используйте кнопку 💳 Получить доступ."
                         ),
                         parse_mode="HTML",
-                        reply_markup=menu_during_attempts  # Отправляем меню, чтобы оно не менялось
+                        reply_markup=menu
                     )
-                    logger.info(f"📧 Отправлено уведомление о недостаточности средств пользователю {telegram_id} С МЕНЮ (попытка {attempt_number}/3)")
+                    logger.info(f"📧 Отправлено финальное уведомление о недостаточности средств пользователю {telegram_id} после {max_attempts} попыток")
                 else:
                     await safe_send_message(
                         bot=bot,
                         chat_id=telegram_id,
                         text=(
                             "⚠️ <b>Автопродление не удалось</b>\n\n"
-                            "Не удалось списать средства с вашего способа оплаты."
+                            "Не удалось списать средства с вашего способа оплаты.\n\n"
+                            "Все попытки автопродления исчерпаны. Автопродление отключено.\n\n"
+                            "Для продления доступа используйте кнопку 💳 Получить доступ."
                         ),
                         parse_mode="HTML",
-                        reply_markup=menu_during_attempts  # Отправляем меню, чтобы оно не менялось
+                        reply_markup=menu
                     )
+                    logger.info(f"📧 Отправлено финальное уведомление о неудачном автопродлении пользователю {telegram_id} после {max_attempts} попыток")
             
             logger.warning(f"⚠️ Автопродление не удалось для пользователя {telegram_id}, попытка {attempt_number}, статус: {refreshed_status}, insufficient_funds: {insufficient_funds}, attempts_after: {attempts_after_failure}")
             return False
@@ -1230,7 +1475,60 @@ async def check_bonus_week_transition_to_production():
                     auto_renewal_enabled = sub_info.get('auto_renewal_enabled', False)
                     saved_payment_method_id = sub_info.get('saved_payment_method_id')
                     
-                    if not auto_renewal_enabled or not saved_payment_method_id:
+                    # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено И нет сохраненного способа оплаты,
+                    # проверяем, истекла ли подписка и отправляем уведомление об истечении доступа, баним пользователя и отзываем ссылку
+                    # ВАЖНО: Это должно срабатывать ТОЛЬКО если автопродление действительно отключено,
+                    # а не просто если нет saved_payment_method_id (так как автопродление может быть включено, но попытка еще не выполнена)
+                    if not auto_renewal_enabled:
+                        # Проверяем, истекла ли бонусная подписка
+                        if expires_at and expires_at <= now:
+                            # Подписка истекла - отправляем уведомление, баним и отзываем ссылку
+                            from db import get_subscription_expired_notified, set_subscription_expired_notified, get_invite_link, get_auto_renewal_attempts
+                            already_notified = await get_subscription_expired_notified(telegram_id)
+                            
+                            # КРИТИЧЕСКИ ВАЖНО: Проверяем, не идут ли попытки автопродления
+                            # Если идут попытки, не отправляем это уведомление (оно будет отправлено в attempt_auto_renewal)
+                            attempts_check = await get_auto_renewal_attempts(telegram_id)
+                            # Если автопродление включено, но попытки еще не начались или уже завершены, не отправляем уведомление здесь
+                            # Уведомление отправляется только если автопродление отключено
+                            
+                            if not already_notified:
+                                # Получаем продакшн меню с "Оплатить доступ"
+                                menu = await get_main_menu_for_user(telegram_id)
+                                
+                                # Отправляем уведомление об истечении доступа
+                                await safe_send_message(
+                                    bot=bot,
+                                    chat_id=telegram_id,
+                                    text=(
+                                        "⏰ <b>Ваш доступ истек</b>\n\n"
+                                        "Бонусная подписка закончилась.\n"
+                                        "Для продления доступа нажмите кнопку 💳 Получить доступ."
+                                    ),
+                                    parse_mode="HTML",
+                                    reply_markup=menu
+                                )
+                                
+                                # Отзываем ссылку пользователя
+                                user_invite_link = await get_invite_link(telegram_id)
+                                if user_invite_link:
+                                    await revoke_invite_link(user_invite_link)
+                                    logger.info(f"✅ Ссылка пользователя {telegram_id} отозвана из-за истечения бонусной подписки (автопродление отключено)")
+                                
+                                # Баним пользователя в канале
+                                try:
+                                    await bot.ban_chat_member(
+                                        chat_id=CHANNEL_ID,
+                                        user_id=telegram_id,
+                                        until_date=None  # Бан навсегда
+                                    )
+                                    logger.info(f"✅ Пользователь {telegram_id} забанен в канале из-за истечения бонусной подписки (автопродление отключено)")
+                                except Exception as ban_error:
+                                    logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                                
+                                # Помечаем, что уведомление отправлено
+                                await set_subscription_expired_notified(telegram_id, True)
+                                logger.info(f"📧 Отправлено уведомление об истечении бонусной подписки пользователю {telegram_id} (автопродление отключено), пользователь забанен")
                         continue
                     
                     # Получаем информацию о попытках

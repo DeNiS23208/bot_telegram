@@ -30,6 +30,8 @@ from db import (
     delete_payment_method,
     is_user_allowed,
     get_invite_link,
+    is_form_filled,
+    get_or_create_form_token,
 )
 from utils import format_datetime_moscow
 from payments import create_payment, get_payment_status, get_payment_url
@@ -113,6 +115,7 @@ BTN_STATUS_1 = "📊 Статус доступа"
 BTN_ABOUT_1 = "ℹ️ О проекте"
 BTN_CHECK_1 = "🔍 Проверить оплату"
 BTN_SUPPORT = "💬 Поддержка"
+BTN_FILL_FORM = "📝 Заполнить данные"  # Кнопка для заполнения формы
 
 # Кнопки для бонусной недели
 BTN_BONUS_WEEK = "🎁 Бонус в честь запуска канала Наиля Хасанова"
@@ -188,6 +191,34 @@ async def send_typing_action(chat_id: int):
         await asyncio.sleep(0.5)  # Небольшая задержка для красивого эффекта
     except:
         pass
+
+
+async def check_form_filled_and_block(telegram_id: int, message: Message) -> bool:
+    """
+    Проверяет, заполнена ли форма. Если нет - отправляет сообщение с кнопкой и возвращает True (блокирует действие).
+    Если форма заполнена - возвращает False (разрешает действие).
+    """
+    form_filled = await is_form_filled(telegram_id)
+    if not form_filled:
+        # Получаем токен для формы
+        form_token = await get_or_create_form_token(telegram_id)
+        # Формируем ссылку на форму с токеном
+        form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
+        
+        # Создаем inline кнопку для перехода на форму
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        form_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Заполнить данные", url=form_url)]
+        ])
+        
+        await message.answer(
+            "📝 <b>Для продолжения заполните пожалуйста данные</b>\n\n"
+            "Пожалуйста, заполните форму, чтобы продолжить пользоваться ботом.",
+            parse_mode="HTML",
+            reply_markup=form_keyboard
+        )
+        return True  # Блокируем действие
+    return False  # Разрешаем действие
 
 
 @dp.message(Command("start"))
@@ -281,14 +312,14 @@ async def cmd_start(message: Message):
     else:
         # Обычный текст для продакшн режима
         welcome_text = (
-        "👋 <b>Добро пожаловать!</b>\n\n"
-        "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
-        "🎯 Здесь вы можете:\n"
-        "• Получить доступ к закрытому каналу\n"
+            "👋 <b>Добро пожаловать!</b>\n\n"
+            "Меня зовут Наиль Хасанов, и я рад приветствовать вас в нашем боте.\n\n"
+            "🎯 Здесь вы можете:\n"
+            "• Получить доступ к закрытому каналу\n"
             "• Управлять своим доступом\n"
-        "• Настроить автопродление\n\n"
-        "Выберите действие в меню ниже 👇"
-    )
+            "• Настроить автопродление\n\n"
+            "Выберите действие в меню ниже 👇"
+        )
     
     # Отправляем видео с текстом в caption (встроено в сообщение)
     video_sent = False
@@ -601,12 +632,36 @@ async def cmd_start(message: Message):
             parse_mode="HTML",
             reply_markup=await main_menu(message.from_user.id),
         )
-        return  # Важно: прерываем выполнение, чтобы не было дублирования
+    
+    # Проверяем, заполнена ли форма
+    form_filled = await is_form_filled(message.from_user.id)
+    if not form_filled:
+        # Получаем токен для формы
+        form_token = await get_or_create_form_token(message.from_user.id)
+        # Формируем ссылку на форму с токеном
+        form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
+        
+        # Создаем inline кнопку для перехода на форму
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        form_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Заполнить данные", url=form_url)]
+        ])
+        
+        await message.answer(
+            "📝 <b>Для продолжения необходимо заполнить данные</b>\n\n"
+            "Пожалуйста, заполните форму, чтобы продолжить пользоваться ботом.",
+            parse_mode="HTML",
+            reply_markup=form_keyboard
+        )
 
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_STATUS_1)
 async def sub_status(message: Message):
     await send_typing_action(message.chat.id)
+    
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
     
     expires_at = await get_subscription_expires_at(message.from_user.id)
     
@@ -660,6 +715,10 @@ async def sub_status(message: Message):
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_ABOUT_1)
 async def about(message: Message):
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     # КРИТИЧЕСКИ ВАЖНО: Используем get_main_menu_for_user из webhook_app, чтобы меню было таким же,
     # как после оплаты. Это гарантирует, что меню не изменится при нажатии "О проекте"
     from webhook_app import get_main_menu_for_user
@@ -683,6 +742,10 @@ async def about(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_BONUS_WEEK)
 async def bonus_week_info(message: Message):
     """Обработчик кнопки 'Бонус в честь запуск канала Наиля Хасанова'"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await ensure_user(message.from_user.id, message.from_user.username)
     await send_typing_action(message.chat.id)
     
@@ -1009,6 +1072,10 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
 # Обработчик для кнопки "Получить доступ" (когда нет подписки)
 @dp.message(lambda m: (m.text or "").strip() == BTN_PAY_1)
 async def pay(message: Message):
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await ensure_user(message.from_user.id, message.from_user.username)
     await send_typing_action(message.chat.id)
 
@@ -1123,6 +1190,10 @@ async def pay(message: Message):
 
 @dp.message(lambda m: (m.text or "").strip() == BTN_CHECK_1)
 async def check_payment(message: Message):
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await send_typing_action(message.chat.id)
     
     payment_id = await get_latest_payment_id(message.from_user.id)
@@ -1208,6 +1279,10 @@ async def check_payment(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_SUPPORT)
 async def support(message: Message):
     """Обработчик кнопки поддержки"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     await send_typing_action(message.chat.id)
     
     await message.answer(
@@ -1293,6 +1368,10 @@ async def cmd_send_miniapp_to_channel(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_MANAGE_SUB)
 async def manage_subscription(message: Message):
     """Обработчик кнопки управления доступом - показывает меню с кнопкой отмены"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
@@ -1551,6 +1630,10 @@ async def manage_subscription(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == "◀️ Назад в меню" or (m.text or "").strip() == BTN_BACK_TO_MENU)
 async def back_to_main_menu(message: Message):
     """Возврат в главное меню"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     # КРИТИЧЕСКИ ВАЖНО: Используем get_main_menu_for_user из webhook_app для единообразия логики
     # Это гарантирует правильное меню во время попыток автопродления
@@ -1566,6 +1649,10 @@ async def back_to_main_menu(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_DISABLE_AUTO_RENEWAL)
 async def disable_auto_renewal_bonus_week(message: Message):
     """Отключение автопродления в бонусной неделе"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
@@ -1657,6 +1744,10 @@ async def disable_auto_renewal_bonus_week(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_CANCEL_SUB)
 async def cancel_subscription(message: Message):
     """Обработчик кнопки отмены доступа - отключает автопродление и удаляет способ оплаты"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
@@ -1668,7 +1759,19 @@ async def cancel_subscription(message: Message):
     # Убеждаемся, что expires_at имеет timezone для сравнения
     expires_at = ensure_timezone_aware(expires_at)
     
-    if not expires_at or expires_at <= now:
+    # КРИТИЧЕСКИ ВАЖНО: Проверяем, включено ли автопродление и идут ли попытки
+    from db import is_auto_renewal_enabled, get_auto_renewal_attempts, reset_auto_renewal_attempts
+    auto_renewal_enabled = await is_auto_renewal_enabled(user_id)
+    attempts = await get_auto_renewal_attempts(user_id)
+    
+    # Проверяем, идут ли попытки автопродления
+    has_active_subscription = expires_at and expires_at > now
+    auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3
+    
+    # КРИТИЧЕСКИ ВАЖНО: Если подписка истекла, но идут попытки автопродления,
+    # все равно отключаем автопродление и сбрасываем попытки
+    if not has_active_subscription and not auto_renewal_in_progress:
+        # Нет активной подписки и нет попыток автопродления
         await message.answer(
             "ℹ️ <b>У вас нет активного доступа</b>\n\n"
             "Доступ уже неактивен или отсутствует.",
@@ -1680,20 +1783,23 @@ async def cancel_subscription(message: Message):
     # Отключаем автопродление И отвязываем карту
     await set_auto_renewal(user_id, False)
     
+    # КРИТИЧЕСКИ ВАЖНО: Сбрасываем счетчик попыток автопродления
+    if attempts > 0:
+        await reset_auto_renewal_attempts(user_id)
+    
     # ВАЖНО: Отвязываем карту (удаляем payment_method_id)
     card_removed = await delete_payment_method(user_id)
     
-    # Получаем информацию о подписке
-    expires_str = format_datetime_moscow(expires_at)
+    # Очищаем кэш для обновления меню
+    from db import _clear_cache
+    _clear_cache()
     
-    # После отмены доступа показываем меню ТОЛЬКО с кнопкой "О проекте"
-    # (без кнопки "Бонус в честь запуска")
-    updated_menu = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_ABOUT_1)],
-        ],
-        resize_keyboard=True,
-    )
+    # Получаем информацию о подписке
+    expires_str = format_datetime_moscow(expires_at) if expires_at else "неизвестно"
+    
+    # Получаем актуальное меню после отключения автопродления
+    from webhook_app import get_main_menu_for_user
+    updated_menu = await get_main_menu_for_user(user_id)
     
     # Формируем сообщение об отвязке карты
     card_message = ""
@@ -1702,23 +1808,34 @@ async def cancel_subscription(message: Message):
     else:
         card_message = "ℹ️ <b>Сохраненная карта не найдена.</b>\n\n"
     
+    # Формируем сообщение в зависимости от статуса подписки
+    if has_active_subscription:
+        # Подписка еще активна
+        subscription_info = f"📅 <b>Доступ действует до:</b> {expires_str}\n\n"
+        subscription_warning = "💡 После окончания срока доступ не будет продлеваться автоматически.\n\n"
+    else:
+        # Подписка истекла, но были попытки автопродления
+        subscription_info = f"📅 <b>Доступ истек:</b> {expires_str}\n\n"
+        subscription_warning = "⚠️ <b>Важно:</b> Автопродление было отключено во время попыток продления.\n"
+        subscription_warning += "Доступ не будет продлеваться автоматически.\n\n"
+    
     await message.answer(
         "━━━━━━━━━━━━━━━━━━━━\n"
         "⏸️ <b>Автопродление отключено</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "✅ Автопродление доступа отключено.\n\n"
+        "✅ Автопродление доступа отключено.\n"
+        "✅ Попытки автопродления остановлены.\n\n"
         f"{card_message}"
-        f"📅 <b>Доступ действует до:</b> {expires_str}\n\n"
-        f"💰 <b>Стоимость доступа:</b> {PAYMENT_AMOUNT_RUB} рублей\n\n"
-        "💡 После окончания срока доступ не будет продлеваться автоматически.\n\n"
-        "🔄 Для возобновления автопродления необходимо оплатить доступ заново.\n\n"
+        f"{subscription_info}"
+        f"{subscription_warning}"
+        "🔄 Для возобновления доступа необходимо оплатить доступ заново.\n\n"
         "🔒 <b>Важно о безопасности:</b>\n"
         "• Карта удалена из нашей базы данных\n"
         "• Мы больше не можем использовать вашу карту для автоплатежей\n"
         "• Если карта видна в личном кабинете YooKassa, вы можете удалить её там вручную\n"
         "• Для этого войдите в личный кабинет YooKassa и удалите сохранённую карту",
         parse_mode="HTML",
-        reply_markup=updated_menu  # Показываем обновленное главное меню с кнопкой "Получить доступ"
+        reply_markup=updated_menu
     )
 
 
@@ -1726,6 +1843,10 @@ async def cancel_subscription(message: Message):
 @dp.message(lambda m: (m.text or "").strip() == BTN_RESUME_SUB)
 async def resume_subscription(message: Message):
     """Обработчик кнопки возобновления доступа - включает автопродление обратно"""
+    # Проверяем, заполнена ли форма
+    if await check_form_filled_and_block(message.from_user.id, message):
+        return
+    
     user_id = message.from_user.id
     await send_typing_action(message.chat.id)
     
