@@ -1545,28 +1545,36 @@ async def check_bonus_week_transition_to_production():
                     should_attempt = False
                     attempt_number = 0
                     
-                    if 0 <= time_since_bonus_end <= 10 and attempts == 0:
-                        # Первая попытка: сразу после окончания бонусной недели (в течение 10 минут)
+                    # Проверяем, истекла ли подписка
+                    subscription_expired = expires_at and expires_at <= now
+                    
+                    if subscription_expired and attempts == 0:
+                        # Первая попытка: СРАЗУ после истечения подписки
                         should_attempt = True
                         attempt_number = 1
-                        logger.info(f"🔄 Первая попытка автопродления для пользователя {telegram_id} (прошло {time_since_bonus_end:.1f} минут с окончания бонусной недели)")
+                        logger.info(f"🔄 Первая попытка автопродления для пользователя {telegram_id} (подписка истекла {((now - expires_at).total_seconds() / 60):.1f} минут назад)")
                     elif attempts > 0 and attempts < 3:
                         # Проверяем, прошло ли 1 минута с последней попытки
                         if last_attempt_at:
                             try:
                                 time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
-                                if 0.5 <= time_since_last_attempt <= 1.5:  # С погрешностью ±0.5 минуты (интервал 1 минута)
+                                if time_since_last_attempt >= 1.0:  # Прошло минимум 1 минута
                                     should_attempt = True
                                     attempt_number = attempts + 1
+                                    logger.info(f"🔄 Попытка {attempt_number} автопродления для пользователя {telegram_id} (прошло {time_since_last_attempt:.1f} минут с последней попытки)")
                             except Exception as time_error:
                                 logger.warning(f"⚠️ Ошибка вычисления времени с последней попытки для пользователя {telegram_id}: {time_error}")
-                                # Если ошибка, все равно пытаемся выполнить попытку, если прошло достаточно времени
-                                should_attempt = True
-                                attempt_number = attempts + 1
+                                # Если ошибка, проверяем, прошло ли достаточно времени (минимум 1 минута)
+                                if last_attempt_at:
+                                    time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
+                                    if time_since_last_attempt >= 1.0:
+                                        should_attempt = True
+                                        attempt_number = attempts + 1
                         else:
                             # Если last_attempt_at нет, но есть попытки - выполняем следующую попытку
                             should_attempt = True
                             attempt_number = attempts + 1
+                            logger.info(f"🔄 Попытка {attempt_number} автопродления для пользователя {telegram_id} (нет информации о последней попытке)")
                     
                     if should_attempt:
                         auto_amount = get_production_subscription_price()
@@ -1933,30 +1941,32 @@ async def check_expired_subscriptions():
                                 should_attempt = False
                                 attempt_number = 0
                                 
-                                # Вычисляем время с момента истечения подписки
-                                time_since_expiry = (now - expires_at).total_seconds() / 60
+                                # Проверяем, истекла ли подписка
+                                subscription_expired = expires_at <= now
                                 
-                                if 0 <= time_since_expiry <= 3 and attempts == 0:
-                                    # Первая попытка: сразу после истечения подписки
+                                if subscription_expired and attempts == 0:
+                                    # Первая попытка: СРАЗУ после истечения подписки
                                     should_attempt = True
                                     attempt_number = 1
+                                    time_since_expiry = (now - expires_at).total_seconds() / 60
                                     logger.info(f"🔄 Первая попытка автопродления для пользователя {telegram_id} (подписка истекла {time_since_expiry:.1f} минут назад)")
                                 elif attempts > 0 and attempts < 3:
-                                    # Проверяем, прошло ли достаточно времени с последней попытки
+                                    # Проверяем, прошло ли 1 минута с последней попытки
                                     if last_attempt_at:
                                         try:
                                             time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
-                                            # Интервал между попытками: 1 минута (для тестов)
-                                            from config import AUTO_RENEWAL_ATTEMPT_INTERVAL_MINUTES
-                                            if time_since_last_attempt >= AUTO_RENEWAL_ATTEMPT_INTERVAL_MINUTES - 0.5:  # С погрешностью
+                                            if time_since_last_attempt >= 1.0:  # Прошло минимум 1 минута
                                                 should_attempt = True
                                                 attempt_number = attempts + 1
                                                 logger.info(f"🔄 Попытка {attempt_number} автопродления для пользователя {telegram_id} (прошло {time_since_last_attempt:.1f} минут с последней попытки)")
                                         except Exception as time_error:
                                             logger.warning(f"⚠️ Ошибка вычисления времени с последней попытки для пользователя {telegram_id}: {time_error}")
-                                            # Если ошибка, все равно пытаемся выполнить попытку, если прошло достаточно времени
-                                            should_attempt = True
-                                            attempt_number = attempts + 1
+                                            # Если ошибка, проверяем, прошло ли достаточно времени (минимум 1 минута)
+                                            if last_attempt_at:
+                                                time_since_last_attempt = (now - last_attempt_at).total_seconds() / 60
+                                                if time_since_last_attempt >= 1.0:
+                                                    should_attempt = True
+                                                    attempt_number = attempts + 1
                                     else:
                                         # Если last_attempt_at нет, но есть попытки - выполняем следующую попытку
                                         should_attempt = True
