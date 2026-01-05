@@ -1078,11 +1078,11 @@ async def check_subscriptions_expiring_soon():
                         notification_days_min = notification_days - 1
                         notification_days_max = notification_days + 1
                         if notification_days_min <= days_left <= notification_days_max:
+                            notification_minutes = int(notification_days * 1440)
+                            minutes_text = f"{notification_minutes} минут{'ы' if 2 <= notification_minutes <= 4 else ''}"
                             await safe_send_message(
                                 bot=bot,
                                 chat_id=telegram_id,
-                                notification_minutes = int(notification_days * 1440)
-                                minutes_text = f"{notification_minutes} минут{'ы' if 2 <= notification_minutes <= 4 else ''}"
                                 text=f"⏰ Внимание! Доступ истекает через {minutes_text}\n\n"
                                     f"Ваш доступ действует до: {expires_at.date()}\n\n"
                                     "Для продления доступа нажмите кнопку 💳 Получить доступ.\n"
