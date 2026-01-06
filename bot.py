@@ -765,6 +765,10 @@ async def sub_status(message: Message):
     if await check_form_filled_and_block(message.from_user.id, message):
         return
     
+    # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш перед получением данных, чтобы всегда показывать актуальную информацию
+    from db import _clear_cache
+    _clear_cache()
+    
     expires_at = await get_subscription_expires_at(message.from_user.id)
     
     if not expires_at:
@@ -777,6 +781,9 @@ async def sub_status(message: Message):
         )
         return
 
+    # Очищаем кэш еще раз перед получением starts_at
+    _clear_cache()
+    
     now = datetime.now(timezone.utc)
     expires_at = ensure_timezone_aware(expires_at)
     if expires_at and expires_at > now:

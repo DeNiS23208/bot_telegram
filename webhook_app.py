@@ -3698,11 +3698,17 @@ async def yookassa_webhook(request: Request):
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось определить тип платежа из payment_obj: {e}")
         
-        # Если тип определен как СБП или SberPay, используем payment_id как payment_method_id
-        if payment_method_type and payment_method_type.lower() in ['sbp', 'sberbank', 'sberpay']:
-            # Для СБП и SberPay используем payment_id как payment_method_id
+        # Если тип определен как СБП, SberPay или банковская карта, используем payment_id как payment_method_id
+        # КРИТИЧЕСКИ ВАЖНО: Для всех типов платежей (СБП, SberPay, банковская карта) используем одинаковую логику
+        if payment_method_type and payment_method_type.lower() in ['sbp', 'sberbank', 'sberpay', 'bank_card', 'card']:
+            # Для СБП, SberPay и банковской карты используем payment_id как payment_method_id
             payment_method_id = payment_id
             logger.info(f"💡 Для {payment_method_type} используем payment_id ({payment_id}) как payment_method_id для автопродления")
+        elif not payment_method_id:
+            # Если payment_method отсутствует, но тип не определен, пробуем использовать payment_id для всех типов
+            # Это обеспечивает одинаковую логику для всех способов оплаты
+            payment_method_id = payment_id
+            logger.info(f"💡 payment_method отсутствует, используем payment_id ({payment_id}) как payment_method_id для автопродления (универсальная логика)")
     
     # ВАЖНО: Активируем подписку для ВСЕХ типов платежей (SberPay, СБП, банковская карта)
     # независимо от наличия или типа payment_method
