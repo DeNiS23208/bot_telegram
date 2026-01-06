@@ -1493,15 +1493,8 @@ async def check_bonus_week_ending_soon():
             # Проверяем каждую минуту для точного уведомления
             await asyncio.sleep(10)  # Уменьшено для более точного срабатывания
             
-            if not is_bonus_week_active():
-                # Если бонусная неделя не активна, очищаем кэш и продолжаем
-                notified_users.clear()
-                continue
-            
-            # Получаем всех пользователей с активными подписками
-            from db import get_all_active_subscriptions
-            active_subs = await get_all_active_subscriptions()
-            
+            # КРИТИЧЕСКИ ВАЖНО: Проверяем по ВРЕМЕНИ, а не через is_bonus_week_active()
+            # Если бонусная неделя закончилась (now > bonus_week_end), НЕ отправляем уведомления
             now = datetime.now(timezone.utc)
             bonus_week_end = get_bonus_week_end()
             # Убеждаемся, что bonus_week_end имеет timezone
@@ -1509,6 +1502,17 @@ async def check_bonus_week_ending_soon():
                 bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
             time_until_end = bonus_week_end - now
             minutes_until_end = time_until_end.total_seconds() / 60
+            
+            # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя уже закончилась (minutes_until_end < 0), НЕ отправляем уведомления
+            if minutes_until_end < 0:
+                # Бонусная неделя закончилась - очищаем кэш и пропускаем отправку уведомлений
+                notified_users.clear()
+                logger.info(f"⏭️ Бонусная неделя закончилась {abs(minutes_until_end):.1f} минут назад - НЕ отправляем уведомления о конце бонусной недели")
+                continue
+            
+            # Получаем всех пользователей с активными подписками только если бонусная неделя еще активна
+            from db import get_all_active_subscriptions
+            active_subs = await get_all_active_subscriptions()
             
             # Проверяем, нужно ли отправлять уведомление (за vremya_sms минут до окончания)
             # Используем погрешность ±0.5 минуты для точности (чтобы не пропустить и не отправить слишком рано)
@@ -1879,9 +1883,10 @@ async def check_expired_subscriptions():
                                         auto_payment_failed = True
                                         logger.info(f"⚠️ Попытка {attempt_number} автопродления не удалась для пользователя {telegram_id}, осталось {3 - attempts_after} попыток")
                                 else:
-                                    # Еще не время для попытки
-                                    logger.info(f"⏸️ Еще не время для попытки автопродления для пользователя {telegram_id} (attempts={attempts}, time_since_expiry={time_since_expiry:.1f} мин)")
-                                    continue
+                                    # Еще не время для попытки - НЕ пропускаем обработку, продолжаем для уведомлений
+                                    logger.info(f"⏸️ Еще не время для попытки автопродления для пользователя {telegram_id} (attempts={attempts})")
+                                    # НЕ устанавливаем auto_payment_failed, чтобы не банить во время попыток
+                                    # Но продолжаем обработку, чтобы можно было отправить уведомление если нужно
                                     
                             except Exception as auto_payment_error:
                                 logger.error(f"❌ Ошибка автоматического списания для пользователя {telegram_id}: {auto_payment_error}")
@@ -1895,6 +1900,13 @@ async def check_expired_subscriptions():
                         # Если автопродление не включено или не удалось, баним и отправляем ссылку на оплату
                         # НО: если автопродление успешно (auto_payment_succeeded = True), НЕ баним пользователя
                         # ВАЖНО: В бонусной неделе, если автопродление отключено, не баним до окончания бонусной недели
+                        # КРИТИЧЕСКИ ВАЖНО: Если автопродление включено, но нет saved_payment_method_id (например, для СберПей),
+                        # то auto_payment_failed должен быть True, чтобы отправить уведомление и забанить
+                        if auto_renewal_enabled and not saved_payment_method_id:
+                            # Автопродление включено, но нет сохраненного способа оплаты - считаем что автопродление не работает
+                            auto_payment_failed = True
+                            logger.warning(f"⚠️ Автопродление включено для пользователя {telegram_id}, но нет saved_payment_method_id - автопродление не может работать")
+                        
                         if not auto_renewal_enabled or not saved_payment_method_id or auto_payment_failed:
                             logger.info(f"🚫 Автопродление не работает для пользователя {telegram_id}: auto_renewal={auto_renewal_enabled}, saved_method={bool(saved_payment_method_id)}, failed={auto_payment_failed}")
                             
@@ -1956,8 +1968,21 @@ async def check_expired_subscriptions():
                         # Отправляем уведомление об истечении доступа ТОЛЬКО если:
                         # 1. Автопродление НЕ было успешным (auto_payment_succeeded = False)
                         # 2. Автопродление отключено или не работает, ИЛИ автоплатеж не удался
-                        # ПРИМЕЧАНИЕ: Если auto_payment_failed = True, уведомление уже было отправлено выше
-                        if not auto_payment_succeeded and not auto_payment_failed and (not auto_renewal_enabled or not saved_payment_method_id):
+                        # КРИТИЧЕСКИ ВАЖНО: Отправляем уведомление об истечении доступа если:
+                        # 1. Автопродление НЕ было успешным (auto_payment_succeeded = False)
+                        # 2. И (автопродление отключено ИЛИ нет saved_payment_method_id ИЛИ все 3 попытки неудачны)
+                        # 3. И НЕ идут попытки автопродления
+                        from db import get_auto_renewal_attempts
+                        attempts_for_notification = await get_auto_renewal_attempts(telegram_id)
+                        is_auto_renewal_in_progress_for_notification = auto_renewal_enabled and attempts_for_notification > 0 and attempts_for_notification < 3
+                        
+                        should_send_expired_notification = (
+                            not auto_payment_succeeded and 
+                            not is_auto_renewal_in_progress_for_notification and
+                            (not auto_renewal_enabled or not saved_payment_method_id or attempts_for_notification >= 3)
+                        )
+                        
+                        if should_send_expired_notification:
                             # Отправляем уведомление об истечении доступа (только один раз, больше никогда)
                             # Проверяем в БД, было ли уже отправлено уведомление
                             from db import get_subscription_expired_notified, set_subscription_expired_notified
@@ -1971,11 +1996,15 @@ async def check_expired_subscriptions():
                                 _clear_cache()
                                 menu = await get_main_menu_for_user(telegram_id)
                                 
+                                notification_text = "⏰ <b>Ваш доступ истек</b>\n\n"
+                                if attempts_for_notification >= 3:
+                                    notification_text += "❌ Все попытки автопродления не удались.\n\n"
+                                notification_text += "Для продления доступа нажмите кнопку 💳 Получить доступ."
+                                
                                 await safe_send_message(
                                     bot=bot,
                                     chat_id=telegram_id,
-                                    text="⏰ <b>Ваш доступ истек</b>\n\n"
-                                        "Для продления доступа нажмите кнопку 💳 Получить доступ.",
+                                    text=notification_text,
                                     parse_mode="HTML",
                                     reply_markup=menu
                                 )
@@ -1992,11 +2021,13 @@ async def check_expired_subscriptions():
                                 # Даже если уведомление уже было отправлено, добавляем в processed_users чтобы не обрабатывать повторно
                                 processed_users[telegram_id] = datetime.now(timezone.utc)
                         else:
-                            # Автопродление успешно - не отправляем уведомление об истечении
-                            logger.info(f"✅ Автопродление успешно для пользователя {telegram_id}, уведомление об истечении не отправляется")
-                        # Добавляем пользователя в processed_users с текущим временем
+                            # Автопродление успешно или идут попытки - не отправляем уведомление об истечении
+                            logger.info(f"✅ Автопродление успешно или идут попытки для пользователя {telegram_id}, уведомление об истечении не отправляется")
+                        
+                        # Добавляем пользователя в processed_users с текущим временем (если еще не добавлен)
+                        if telegram_id not in processed_users:
                             processed_users[telegram_id] = datetime.now(timezone.utc)
-                        logger.info(f"✅ Пользователь {telegram_id} добавлен в processed_users")
+                            logger.info(f"✅ Пользователь {telegram_id} добавлен в processed_users")
                         
                 except Exception as e:
                     logger.error(f"❌ Ошибка обработки истекшей подписки для пользователя {telegram_id}: {e}")
@@ -2747,6 +2778,29 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"⚠️ Не удалось получить id для payment_method: {pm}")
     else:
         logger.warning(f"⚠️ payment_method отсутствует или None для платежа {payment_id} - это нормально для SberPay и СБП")
+        # КРИТИЧЕСКИ ВАЖНО: Для СберПей и СБП payment_method может отсутствовать,
+        # но мы можем использовать payment_id как payment_method_id для автопродления
+        # Это работает, если магазин настроен для автоплатежей в ЮKassa
+        # Пробуем определить тип платежа из webhook уведомления
+        # Если payment_method_type не определен, пробуем получить из payment_obj
+        if not payment_method_type:
+            try:
+                # Пробуем получить тип из payment_obj (из webhook)
+                if hasattr(payment, 'payment_method') and payment.payment_method:
+                    pm = payment.payment_method
+                    if hasattr(pm, 'type'):
+                        payment_method_type = pm.type
+                    elif isinstance(pm, dict) and 'type' in pm:
+                        payment_method_type = pm['type']
+                    logger.info(f"💡 Определен тип платежа из payment_obj: {payment_method_type}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось определить тип платежа из payment_obj: {e}")
+        
+        # Если тип определен как СБП или SberPay, используем payment_id как payment_method_id
+        if payment_method_type and payment_method_type.lower() in ['sbp', 'sberbank', 'sberpay']:
+            # Для СБП и SberPay используем payment_id как payment_method_id
+            payment_method_id = payment_id
+            logger.info(f"💡 Для {payment_method_type} используем payment_id ({payment_id}) как payment_method_id для автопродления")
     
     # ВАЖНО: Активируем подписку для ВСЕХ типов платежей (SberPay, СБП, банковская карта)
     # независимо от наличия или типа payment_method
@@ -2815,22 +2869,27 @@ async def yookassa_webhook(request: Request):
         subscription_duration = get_production_subscription_duration()
         is_bonus_payment = False  # Переопределяем, чтобы не создавать бонусную подписку
         logger.info(f"⚔️ БОЕВОЙ РЕЖИМ: Платеж на 1 рубль после окончания бонусной недели для пользователя {tg_user_id}, создаем ПРОДАКШН подписку на {format_subscription_duration(subscription_duration)}")
-    elif is_bonus_week_active():
-        # Бонусная неделя активна, но это не бонусный платеж (не 1 рубль)
-        # Это не должно происходить в нормальной работе, но на всякий случай
-        bonus_end = get_bonus_week_end()
-        if bonus_end.tzinfo is None:
-            bonus_end = bonus_end.replace(tzinfo=tz.utc)
-        remaining_time = bonus_end - now
-        if remaining_time.total_seconds() > 0:
-            subscription_duration = remaining_time.total_seconds() / 86400
-            logger.info(f"🎁 Бонусная неделя активна для пользователя {tg_user_id}, оставшееся время: {remaining_time.total_seconds() / 60:.1f} минут ({subscription_duration:.6f} дней)")
-        else:
-            subscription_duration = get_production_subscription_duration()
-            logger.info(f"⚠️ Бонусная неделя закончилась для пользователя {tg_user_id}, используем продакшн длительность: {format_subscription_duration(subscription_duration)}")
     else:
-        # Продакшн режим: используем продакшн длительность из config
-        subscription_duration = get_production_subscription_duration()
+        # КРИТИЧЕСКИ ВАЖНО: Проверяем по ВРЕМЕНИ, а не через is_bonus_week_active()
+        bonus_week_end_check_time = get_bonus_week_end()
+        if bonus_week_end_check_time.tzinfo is None:
+            bonus_week_end_check_time = bonus_week_end_check_time.replace(tzinfo=timezone.utc)
+        bonus_week_still_active_time = now <= bonus_week_end_check_time
+        
+        if bonus_week_still_active_time:
+            # Бонусная неделя активна по времени, но это не бонусный платеж (не 1 рубль)
+            # Это не должно происходить в нормальной работе, но на всякий случай
+            remaining_time = bonus_week_end_check_time - now
+            if remaining_time.total_seconds() > 0:
+                subscription_duration = remaining_time.total_seconds() / 86400
+                logger.info(f"🎁 Бонусная неделя активна для пользователя {tg_user_id}, оставшееся время: {remaining_time.total_seconds() / 60:.1f} минут ({subscription_duration:.6f} дней)")
+            else:
+                subscription_duration = get_production_subscription_duration()
+                logger.info(f"⚠️ Бонусная неделя закончилась для пользователя {tg_user_id}, используем продакшн длительность: {format_subscription_duration(subscription_duration)}")
+        else:
+            # Бонусная неделя закончилась - используем продакшн длительность
+            subscription_duration = get_production_subscription_duration()
+            logger.info(f"⚔️ Бонусная неделя закончилась для пользователя {tg_user_id}, используем продакшн длительность: {format_subscription_duration(subscription_duration)}")
         logger.info(f"💼 Продакшн режим для пользователя {tg_user_id}, длительность: {format_subscription_duration(subscription_duration)}")
     
     # ВАЖНО: Для бонусной недели устанавливаем expires_at = bonus_week_end напрямую
@@ -2968,9 +3027,16 @@ async def yookassa_webhook(request: Request):
                     payment_method_name = "SberPay"
             
             # Определяем текст в зависимости от режима (бонусная неделя или продакшн)
-            # КРИТИЧЕСКИ ВАЖНО: Проверяем по сумме платежа, а не по текущему состоянию бонусной недели
-            # Переменная is_bonus_payment определена выше в коде
-            if is_bonus_payment:
+            # КРИТИЧЕСКИ ВАЖНО: Проверяем по сумме платежа И по времени окончания бонусной недели
+            # Если бонусная неделя закончилась, НЕ показываем текст о бонусной неделе
+            now_for_auto_renewal_check = datetime.now(timezone.utc)
+            bonus_week_end_for_auto_renewal = get_bonus_week_end()
+            if bonus_week_end_for_auto_renewal.tzinfo is None:
+                bonus_week_end_for_auto_renewal = bonus_week_end_for_auto_renewal.replace(tzinfo=timezone.utc)
+            bonus_week_still_active_for_auto_renewal = now_for_auto_renewal_check <= bonus_week_end_for_auto_renewal
+            
+            if is_bonus_payment and bonus_week_still_active_for_auto_renewal:
+                # Только если это бонусный платеж И бонусная неделя еще активна - показываем текст о бонусной неделе
                 auto_renewal_text = (
                     f"🔄 <b>Автопродление включено</b>\n\n"
                     f"⚠️ <b>После окончания бонусной недели:</b>\n"
@@ -2978,10 +3044,12 @@ async def yookassa_webhook(request: Request):
                     f"• Доступ будет автоматически продлеваться каждые <b>{format_subscription_duration(get_production_subscription_duration())}</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
+                logger.info(f"✅ Показываем текст о бонусной неделе в auto_renewal_text для пользователя {tg_user_id}: is_bonus_payment={is_bonus_payment}, bonus_week_still_active={bonus_week_still_active_for_auto_renewal}")
             else:
                 auto_renewal_text = (
                     f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(get_production_subscription_duration())}.\n\n"
                 )
+                logger.info(f"❌ НЕ показываем текст о бонусной неделе в auto_renewal_text для пользователя {tg_user_id}: is_bonus_payment={is_bonus_payment}, bonus_week_still_active={bonus_week_still_active_for_auto_renewal}")
             
             # Отправляем уведомление о сохранении способа оплаты только один раз
             # Используем payment_id как уникальный ключ для предотвращения дублирования
@@ -3292,9 +3360,7 @@ async def yookassa_webhook(request: Request):
         
         logger.info(f"🔍 Проверка бонусной подписки для меню: is_bonus_payment={is_bonus_payment}, is_bonus_subscription={is_bonus_subscription}, expires_at={expires_at_dt}, bonus_week_end={bonus_week_end_check}, bonus_week_ended={bonus_week_ended_for_menu}")
         
-        # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, ВСЕГДА показываем БОЕВОЙ РЕЖИМ,
-        # независимо от суммы платежа или expires_at
-        # НЕ проверяем is_bonus_subscription, если бонусная неделя закончилась
+        # КРИТИЧЕСКИ ВАЖНО: Определяем правильное меню в зависимости от типа подписки
         if bonus_week_ended_for_menu:
             # БОЕВОЙ РЕЖИМ: Бонусная неделя закончилась, после оплаты показываем БОЕВОЙ РЕЖИМ с "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
@@ -3313,8 +3379,20 @@ async def yookassa_webhook(request: Request):
                 resize_keyboard=True,
             )
             logger.info(f"⚔️ БОЕВОЙ РЕЖИМ: Создано меню БОЕВОГО РЕЖИМА с 'Управление доступом' для пользователя {tg_user_id} (тип платежа: {payment_type_name}, бонусная неделя закончилась)")
+        elif is_bonus_subscription:
+            # БОНУСНАЯ НЕДЕЛЯ: После успешной оплаты ВСЕГДА показываем бонусное меню с двумя кнопками
+            BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_ABOUT_1 = "ℹ️ О проекте"
+            menu = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text=BTN_MANAGE_SUB)],
+                    [KeyboardButton(text=BTN_ABOUT_1)],
+                ],
+                resize_keyboard=True,
+            )
+            logger.info(f"✅ ПРИНУДИТЕЛЬНО создано меню БОНУСНОЙ НЕДЕЛИ с 'Управление доступом' для пользователя {tg_user_id} (тип платежа: {payment_type_name})")
         else:
-            # ПРОДАКШН (бонусная неделя еще активна): Используем стандартное меню
+            # ПРОДАКШН (бонусная неделя еще активна, но это не бонусная подписка): Используем стандартное меню
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
             BTN_STATUS_1 = "📊 Статус доступа"
             BTN_ABOUT_1 = "ℹ️ О проекте"
@@ -3361,9 +3439,17 @@ async def yookassa_webhook(request: Request):
             duration_text = format_subscription_duration(subscription_duration)
         
         # Формируем текст в зависимости от режима (бонусная неделя или продакшн)
-        # КРИТИЧЕСКИ ВАЖНО: Используем is_bonus_subscription, а не is_bonus_week_active()
-        # Переменная is_bonus_subscription определена выше в блоке if invite_link
-        if is_bonus_subscription:
+        # КРИТИЧЕСКИ ВАЖНО: Проверяем по ВРЕМЕНИ, а не через is_bonus_week_active()
+        # Если бонусная неделя закончилась (now > bonus_week_end), НЕ показываем текст о бонусной неделе
+        bonus_warning = ""
+        now_for_bonus_check = datetime.now(timezone.utc)
+        bonus_week_end_for_check = get_bonus_week_end()
+        if bonus_week_end_for_check.tzinfo is None:
+            bonus_week_end_for_check = bonus_week_end_for_check.replace(tzinfo=timezone.utc)
+        bonus_week_still_active = now_for_bonus_check <= bonus_week_end_for_check
+        
+        if is_bonus_subscription and bonus_week_still_active:
+            # Только если это бонусная подписка И бонусная неделя еще активна по времени - показываем текст о бонусной неделе
             bonus_warning = (
                 "\n\n🎉 <b>БОНУСНАЯ НЕДЕЛЯ</b>\n"
                 f"⏰ Ваш доступ действует до окончания бонусной недели\n\n"
@@ -3371,8 +3457,9 @@ async def yookassa_webhook(request: Request):
                 f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
                 "• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
             )
+            logger.info(f"✅ Показываем текст о бонусной неделе для пользователя {tg_user_id}: is_bonus_subscription={is_bonus_subscription}, bonus_week_still_active={bonus_week_still_active}")
         else:
-            bonus_warning = ""
+            logger.info(f"❌ НЕ показываем текст о бонусной неделе для пользователя {tg_user_id}: is_bonus_subscription={is_bonus_subscription}, bonus_week_still_active={bonus_week_still_active}, now={now_for_bonus_check}, bonus_week_end={bonus_week_end_for_check}")
         
         logger.info(f"📤 Отправка сообщения об успешной оплате пользователю {tg_user_id}")
         logger.info(f"🔍 Детали: invite_link={invite_link}, starts_str={starts_str}, expires_str={expires_str}, duration_text={duration_text}")
@@ -3518,7 +3605,14 @@ async def yookassa_webhook(request: Request):
             duration_text = format_subscription_duration(subscription_duration)
         
         # Формируем текст в зависимости от режима (бонусная неделя или продакшн)
-        if is_bonus_week_active():
+        # КРИТИЧЕСКИ ВАЖНО: Проверяем по ВРЕМЕНИ, а не через is_bonus_week_active()
+        now_for_bonus_check_else = datetime.now(timezone.utc)
+        bonus_week_end_for_check_else = get_bonus_week_end()
+        if bonus_week_end_for_check_else.tzinfo is None:
+            bonus_week_end_for_check_else = bonus_week_end_for_check_else.replace(tzinfo=timezone.utc)
+        bonus_week_still_active_else = now_for_bonus_check_else <= bonus_week_end_for_check_else
+        
+        if bonus_week_still_active_else:
             bonus_warning = (
                 "\n\n🎉 <b>БОНУСНАЯ НЕДЕЛЯ</b>\n"
                 f"⏰ Ваш доступ действует до окончания бонусной недели\n\n"
@@ -3526,8 +3620,10 @@ async def yookassa_webhook(request: Request):
                 f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
                 "• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
             )
+            logger.info(f"✅ Показываем текст о бонусной неделе (else блок) для пользователя {tg_user_id}: bonus_week_still_active={bonus_week_still_active_else}")
         else:
             bonus_warning = ""
+            logger.info(f"❌ НЕ показываем текст о бонусной неделе (else блок) для пользователя {tg_user_id}: bonus_week_still_active={bonus_week_still_active_else}, now={now_for_bonus_check_else}, bonus_week_end={bonus_week_end_for_check_else}")
         
         await safe_send_message(
             bot=bot,
