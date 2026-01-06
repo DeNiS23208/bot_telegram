@@ -8,6 +8,8 @@ pytz==2024.1
 # Если ты делаешь вебхук ЮKassa через FastAPI (рекомендовано)
 fastapi==0.124.4
 uvicorn==0.38.0
+jinja2==3.1.4
+python-multipart==0.0.9
 
 # Для генерации Excel отчетов
 openpyxl==3.1.2

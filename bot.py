@@ -206,8 +206,8 @@ async def check_form_filled_and_block(telegram_id: int, message: Message) -> boo
         print(f"🚫 Форма НЕ заполнена для {telegram_id}, блокируем действие")
         # Получаем уникальный токен для формы
         form_token = await get_or_create_form_token(telegram_id)
-        # Формируем ссылку на форму с токеном
-        form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
+        # Формируем ссылку на нашу собственную форму с токеном и telegram_id
+        form_url = f"https://xasanim.ru/form?token={form_token}&telegram_id={telegram_id}"
         
         # Создаем inline кнопку для перехода на форму
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton

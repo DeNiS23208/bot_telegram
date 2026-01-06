@@ -3,13 +3,25 @@ import aiosqlite
 import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
+import smtplib
+import tempfile
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
 from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import ChatJoinRequest, ReplyKeyboardMarkup, KeyboardButton
 from yookassa import Payment, Configuration
 from yookassa.domain.notification import WebhookNotificationFactory
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from utils import format_datetime_moscow
 from config import (
@@ -71,6 +83,13 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
+# Email настройки для отправки данных формы
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.mail.ru")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+REPORT_EMAIL = os.getenv("REPORT_EMAIL", "xasanimbuiss@mail.ru")
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing in .env")
 
@@ -82,6 +101,12 @@ Configuration.secret_key = YOOKASSA_SECRET_KEY
 
 # ================== APP ==================
 app = FastAPI()
+
+# Настройка статических файлов и шаблонов
+BASE_DIR = Path(__file__).parent
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
 bot = Bot(token=BOT_TOKEN)
 
 # Запускаем фоновые задачи для проверки истекших платежей и подписок
@@ -115,7 +140,867 @@ async def startup_event():
     asyncio.create_task(check_bonus_week_ending_soon())  # Уведомления о окончании бонусной недели
     asyncio.create_task(check_bonus_week_transition_to_production())  # Уведомления о переходе в продакшн режим
     asyncio.create_task(cleanup_old_data_task())  # Добавляем задачу очистки
+    asyncio.create_task(daily_form_summary_task())  # Ежедневная сводка по заполненным формам
     logger.info("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
+
+
+# ================== CUSTOM FORM ENDPOINTS ==================
+
+async def send_form_data_email(telegram_id: int, form_data: dict) -> bool:
+    """
+    Отправляет данные формы на email
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        form_data: Словарь с данными формы
+        
+    Returns:
+        True если успешно, False иначе
+    """
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger.warning("⚠️ SMTP настройки не заданы, пропускаем отправку email")
+        return False
+    
+    try:
+        # Получаем username пользователя из БД
+        username = "не указан"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT username FROM users WHERE telegram_id = ?",
+                    (telegram_id,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    username = f"@{row[0]}"
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось получить username: {e}")
+        
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = REPORT_EMAIL
+        msg['Subject'] = f"Новая заявка с формы - {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M')}"
+        
+        # Форматируем данные формы
+        gender_map = {
+            "male": "Мужской",
+            "female": "Женский",
+            "other": "Другое"
+        }
+        gender_display = gender_map.get(form_data.get("gender", ""), form_data.get("gender", "не указан"))
+        
+        # Текст письма
+        body = f"""Здравствуйте!
+
+Получена новая заявка с формы регистрации.
+
+📅 Дата заполнения: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S')} UTC
+👤 Telegram ID: {telegram_id}
+📱 Username: {username}
+
+📋 ДАННЫЕ ФОРМЫ:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 Имя: {form_data.get('name', 'не указано')}
+📞 Телефон: {form_data.get('phone', 'не указан')}
+📧 Email: {form_data.get('email', 'не указан')}
+🏙️ Город проживания: {form_data.get('city', 'не указан')}
+⚧️ Пол: {gender_display}
+💼 Направление деятельности: {form_data.get('activity', 'не указано')}
+
+✅ Согласие на обработку персональных данных: {'Да' if form_data.get('privacy_accepted') else 'Нет'}
+✅ Согласие с условиями Оферты: {'Да' if form_data.get('offer_accepted') else 'Нет'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+---
+Это автоматическое сообщение, не отвечайте на него.
+        """
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Отправляем email
+        logger.info(f"📧 Отправка данных формы на {REPORT_EMAIL}...")
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        text = msg.as_string()
+        server.sendmail(SMTP_USER, REPORT_EMAIL, text)
+        server.quit()
+        
+        logger.info(f"✅ Данные формы успешно отправлены на {REPORT_EMAIL}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке данных формы на email: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def save_form_data_to_excel(telegram_id: int, form_data: dict) -> str:
+    """
+    Сохраняет данные формы в Excel файл
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        form_data: Словарь с данными формы
+        
+    Returns:
+        Путь к созданному Excel файлу или None при ошибке
+    """
+    try:
+        # Получаем username пользователя из БД
+        username = None
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT username FROM users WHERE telegram_id = ?",
+                    (telegram_id,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    username = row[0]
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось получить username: {e}")
+        
+        # Создаем Excel файл
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Данные формы"
+        
+        # Стили
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Заголовки
+        headers = [
+            "Дата заполнения",
+            "Telegram ID",
+            "Username",
+            "Имя",
+            "Телефон",
+            "Email",
+            "Город проживания",
+            "Пол",
+            "Направление деятельности",
+            "Согласие на обработку ПД",
+            "Согласие с Офертой"
+        ]
+        
+        # Записываем заголовки
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+        
+        # Форматируем данные
+        gender_map = {
+            "male": "Мужской",
+            "female": "Женский",
+            "other": "Другое"
+        }
+        gender_display = gender_map.get(form_data.get("gender", ""), form_data.get("gender", "не указан"))
+        
+        # Записываем данные
+        row_data = [
+            datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S'),
+            telegram_id,
+            f"@{username}" if username else "не указан",
+            form_data.get('name', 'не указано'),
+            form_data.get('phone', 'не указан'),
+            form_data.get('email', 'не указан'),
+            form_data.get('city', 'не указан'),
+            gender_display,
+            form_data.get('activity', 'не указано'),
+            'Да' if form_data.get('privacy_accepted') else 'Нет',
+            'Да' if form_data.get('offer_accepted') else 'Нет'
+        ]
+        
+        for col, value in enumerate(row_data, 1):
+            cell = ws.cell(row=2, column=col, value=value)
+            cell.border = border
+            cell.alignment = Alignment(horizontal='left', vertical='center')
+        
+        # Автоматическая ширина колонок
+        for col in range(1, len(headers) + 1):
+            column_letter = ws.cell(row=1, column=col).column_letter
+            max_length = 0
+            for row in ws.iter_rows(min_row=1, max_row=2, min_col=col, max_col=col):
+                for cell in row:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Сохраняем файл
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        excel_filename = f"form_data_{telegram_id}_{timestamp}.xlsx"
+        excel_path = os.path.join(tempfile.gettempdir(), excel_filename)
+        wb.save(excel_path)
+        
+        logger.info(f"✅ Данные формы сохранены в Excel: {excel_path}")
+        return excel_path
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сохранении данных формы в Excel: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+async def save_form_to_daily_table(telegram_id: int, form_data: dict) -> bool:
+    """
+    Сохраняет данные формы в таблицу для ежедневной сводки
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        form_data: Словарь с данными формы
+        
+    Returns:
+        True если успешно, False иначе
+    """
+    try:
+        # Получаем username пользователя из БД
+        username = None
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT username FROM users WHERE telegram_id = ?",
+                    (telegram_id,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    username = row[0]
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось получить username: {e}")
+        
+        # Сохраняем данные в таблицу
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO daily_form_submissions (
+                    telegram_id, username, name, phone, email, city, gender, 
+                    activity, privacy_accepted, offer_accepted, submitted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                telegram_id,
+                username,
+                form_data.get('name', 'не указано'),
+                form_data.get('phone', 'не указан'),
+                form_data.get('email', 'не указан'),
+                form_data.get('city', 'не указан'),
+                form_data.get('gender', 'не указан'),
+                form_data.get('activity', 'не указано'),
+                1 if form_data.get('privacy_accepted') else 0,
+                1 if form_data.get('offer_accepted') else 0,
+                datetime.now(timezone.utc).isoformat()
+            ))
+            await db.commit()
+        
+        logger.info(f"✅ Данные формы сохранены в таблицу для ежедневной сводки: {telegram_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сохранении данных формы в таблицу: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def daily_form_summary_task():
+    """
+    Фоновая задача для отправки ежедневной сводки по заполненным формам
+    Запускается раз в 24 часа
+    """
+    # Ждем до следующего полного часа (для синхронизации)
+    now = datetime.now(timezone.utc)
+    next_hour = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    wait_seconds = (next_hour - now).total_seconds()
+    logger.info(f"⏰ Ежедневная сводка запустится через {wait_seconds/3600:.1f} часов (в {next_hour.strftime('%H:00')} UTC)")
+    await asyncio.sleep(wait_seconds)
+    
+    while True:
+        try:
+            logger.info("📊 Запуск ежедневной сводки по заполненным формам...")
+            await send_daily_form_summary()
+            # Ждем 24 часа до следующей отправки
+            logger.info("⏰ Следующая сводка будет отправлена через 24 часа")
+            await asyncio.sleep(86400)  # 24 часа
+        except Exception as e:
+            logger.error(f"❌ Ошибка в задаче ежедневной сводки: {e}")
+            import traceback
+            traceback.print_exc()
+            # При ошибке ждем 6 часов перед следующей попыткой
+            await asyncio.sleep(21600)
+
+
+async def send_daily_form_summary() -> bool:
+    """
+    Собирает всех, кто заполнил форму за последние 24 часа, и отправляет сводку на email
+    
+    Returns:
+        True если успешно, False иначе
+    """
+    try:
+        # Вычисляем время 24 часа назад
+        twenty_four_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        
+        # Получаем все записи за последние 24 часа
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT * FROM daily_form_submissions 
+                WHERE submitted_at >= ?
+                ORDER BY submitted_at ASC
+            """, (twenty_four_hours_ago,))
+            rows = await cursor.fetchall()
+        
+        if not rows:
+            logger.info("ℹ️ За последние 24 часа никто не заполнил форму - сводка не отправляется")
+            return True
+        
+        logger.info(f"📊 Найдено {len(rows)} заполненных форм за последние 24 часа")
+        
+        # Создаем Excel файл со сводкой
+        excel_path = await create_daily_summary_excel(rows)
+        if not excel_path:
+            logger.error("❌ Не удалось создать Excel файл со сводкой")
+            return False
+        
+        # Отправляем сводку на email
+        success = await send_daily_summary_email(excel_path, len(rows))
+        
+        # Удаляем старые записи (старше 24 часов) после успешной отправки
+        if success:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                    DELETE FROM daily_form_submissions 
+                    WHERE submitted_at < ?
+                """, (twenty_four_hours_ago,))
+                await db.commit()
+            logger.info(f"🗑️ Удалены старые записи из таблицы daily_form_submissions (старше 24 часов)")
+        
+        # Удаляем временный Excel файл
+        try:
+            os.remove(excel_path)
+            logger.info(f"🗑️ Временный Excel файл удален: {excel_path}")
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ Не удалось удалить временный файл: {cleanup_error}")
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке ежедневной сводки: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def create_daily_summary_excel(rows: list) -> str:
+    """
+    Создает Excel файл со сводкой по заполненным формам за 24 часа
+    
+    Args:
+        rows: Список записей из БД
+        
+    Returns:
+        Путь к созданному Excel файлу или None при ошибке
+    """
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Сводка за 24 часа"
+        
+        # Стили
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Заголовки
+        headers = [
+            "Дата заполнения",
+            "Telegram ID",
+            "Username",
+            "Имя",
+            "Телефон",
+            "Email",
+            "Город проживания",
+            "Пол",
+            "Направление деятельности",
+            "Согласие на обработку ПД",
+            "Согласие с Офертой"
+        ]
+        
+        # Записываем заголовки
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+        
+        # Форматируем данные
+        gender_map = {
+            "male": "Мужской",
+            "female": "Женский",
+            "other": "Другое"
+        }
+        
+        # Записываем данные
+        for row_idx, row in enumerate(rows, 2):
+            # Конвертируем дату
+            try:
+                submitted_dt = datetime.fromisoformat(row['submitted_at'].replace('Z', '+00:00'))
+                if submitted_dt.tzinfo is None:
+                    submitted_dt = submitted_dt.replace(tzinfo=timezone.utc)
+                submitted_str = submitted_dt.strftime('%d.%m.%Y %H:%M:%S')
+            except:
+                submitted_str = row['submitted_at']
+            
+            gender_display = gender_map.get(row['gender'], row['gender'] or 'не указан')
+            
+            row_data = [
+                submitted_str,
+                row['telegram_id'],
+                f"@{row['username']}" if row['username'] else "не указан",
+                row['name'],
+                row['phone'],
+                row['email'],
+                row['city'],
+                gender_display,
+                row['activity'],
+                'Да' if row['privacy_accepted'] else 'Нет',
+                'Да' if row['offer_accepted'] else 'Нет'
+            ]
+            
+            for col, value in enumerate(row_data, 1):
+                cell = ws.cell(row=row_idx, column=col, value=value)
+                cell.border = border
+                cell.alignment = Alignment(horizontal='left', vertical='center')
+        
+        # Автоматическая ширина колонок
+        for col in range(1, len(headers) + 1):
+            column_letter = ws.cell(row=1, column=col).column_letter
+            max_length = 0
+            for row in ws.iter_rows(min_row=1, max_row=len(rows) + 1, min_col=col, max_col=col):
+                for cell in row:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Сохраняем файл
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        excel_filename = f"daily_form_summary_{timestamp}.xlsx"
+        excel_path = os.path.join(tempfile.gettempdir(), excel_filename)
+        wb.save(excel_path)
+        
+        logger.info(f"✅ Excel файл со сводкой создан: {excel_path}")
+        return excel_path
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании Excel файла со сводкой: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+async def send_daily_summary_email(excel_path: str, count: int) -> bool:
+    """
+    Отправляет ежедневную сводку по заполненным формам на email
+    
+    Args:
+        excel_path: Путь к Excel файлу
+        count: Количество заполненных форм
+        
+    Returns:
+        True если успешно, False иначе
+    """
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger.warning("⚠️ SMTP настройки не заданы, пропускаем отправку сводки")
+        return False
+    
+    if not excel_path or not os.path.exists(excel_path):
+        logger.warning(f"⚠️ Excel файл не найден: {excel_path}")
+        return False
+    
+    try:
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = REPORT_EMAIL
+        msg['Subject'] = f"Ежедневная сводка по формам - {datetime.now(timezone.utc).strftime('%d.%m.%Y')}"
+        
+        # Текст письма
+        body = f"""Здравствуйте!
+
+Ежедневная сводка по заполненным формам за последние 24 часа.
+
+📅 Дата: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S')} UTC
+📊 Количество заполненных форм: {count}
+
+Файл со сводкой прикреплен к письму.
+
+---
+Это автоматическое сообщение, не отвечайте на него.
+        """
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Прикрепляем Excel файл
+        with open(excel_path, 'rb') as attachment:
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {os.path.basename(excel_path)}'
+            )
+            msg.attach(part)
+        
+        # Отправляем email
+        logger.info(f"📧 Отправка ежедневной сводки на {REPORT_EMAIL}...")
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        text = msg.as_string()
+        server.sendmail(SMTP_USER, REPORT_EMAIL, text)
+        server.quit()
+        
+        logger.info(f"✅ Ежедневная сводка успешно отправлена на {REPORT_EMAIL}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке ежедневной сводки на email: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def send_excel_file_email(excel_path: str) -> bool:
+    """
+    Отправляет Excel файл с данными формы на email
+    
+    Args:
+        excel_path: Путь к Excel файлу
+        
+    Returns:
+        True если успешно, False иначе
+    """
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger.warning("⚠️ SMTP настройки не заданы, пропускаем отправку Excel")
+        return False
+    
+    if not excel_path or not os.path.exists(excel_path):
+        logger.warning(f"⚠️ Excel файл не найден: {excel_path}")
+        return False
+    
+    try:
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = REPORT_EMAIL
+        msg['Subject'] = f"Данные формы в Excel - {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M')}"
+        
+        # Текст письма
+        body = f"""Здравствуйте!
+
+Данные формы сохранены в Excel файл.
+
+📅 Дата: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S')} UTC
+
+Файл прикреплен к письму.
+
+---
+Это автоматическое сообщение, не отвечайте на него.
+        """
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Прикрепляем Excel файл
+        with open(excel_path, 'rb') as attachment:
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {os.path.basename(excel_path)}'
+            )
+            msg.attach(part)
+        
+        # Отправляем email
+        logger.info(f"📧 Отправка Excel файла на {REPORT_EMAIL}...")
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        text = msg.as_string()
+        server.sendmail(SMTP_USER, REPORT_EMAIL, text)
+        server.quit()
+        
+        logger.info(f"✅ Excel файл успешно отправлен на {REPORT_EMAIL}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке Excel файла на email: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+@app.get("/form", response_class=HTMLResponse)
+async def show_form(request: Request, token: str = None, telegram_id: str = None):
+    """Отображает HTML форму для заполнения данных"""
+    if not token or not telegram_id:
+        return HTMLResponse(
+            content="""
+            <!DOCTYPE html>
+            <html lang="ru">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Ошибка</title>
+                <style>
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                        margin: 0;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    }
+                    .error-container {
+                        background: white;
+                        padding: 40px;
+                        border-radius: 20px;
+                        text-align: center;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    }
+                    h1 { color: #e74c3c; margin-bottom: 20px; }
+                    p { color: #666; font-size: 16px; }
+                </style>
+            </head>
+            <body>
+                <div class="error-container">
+                    <h1>❌ Неверная ссылка</h1>
+                    <p>Пожалуйста, используйте ссылку из бота.</p>
+                </div>
+            </body>
+            </html>
+            """,
+            status_code=400
+        )
+    
+    # Проверяем, что токен валидный
+    try:
+        from db import get_user_by_form_token
+        user_data = await get_user_by_form_token(token)
+        if not user_data:
+            return HTMLResponse(
+                content="""
+                <!DOCTYPE html>
+                <html lang="ru">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Ошибка</title>
+                    <style>
+                        body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            min-height: 100vh;
+                            margin: 0;
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        }
+                        .error-container {
+                            background: white;
+                            padding: 40px;
+                            border-radius: 20px;
+                            text-align: center;
+                            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                        }
+                        h1 { color: #e74c3c; margin-bottom: 20px; }
+                        p { color: #666; font-size: 16px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="error-container">
+                        <h1>❌ Неверный токен</h1>
+                        <p>Токен не найден или истек. Пожалуйста, получите новую ссылку из бота.</p>
+                    </div>
+                </body>
+                </html>
+                """,
+                status_code=400
+            )
+        
+        # Проверяем, что telegram_id совпадает
+        user_telegram_id, _ = user_data
+        if str(user_telegram_id) != telegram_id:
+            return HTMLResponse(
+                content="""
+                <!DOCTYPE html>
+                <html lang="ru">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Ошибка</title>
+                    <style>
+                        body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            min-height: 100vh;
+                            margin: 0;
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        }
+                        .error-container {
+                            background: white;
+                            padding: 40px;
+                            border-radius: 20px;
+                            text-align: center;
+                            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                        }
+                        h1 { color: #e74c3c; margin-bottom: 20px; }
+                        p { color: #666; font-size: 16px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="error-container">
+                        <h1>❌ Ошибка</h1>
+                        <p>Неверный идентификатор пользователя.</p>
+                    </div>
+                </body>
+                </html>
+                """,
+                status_code=400
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке токена: {e}")
+        return HTMLResponse(
+            content=f"<h1>Ошибка сервера</h1><p>{str(e)}</p>",
+            status_code=500
+        )
+    
+    return templates.TemplateResponse("form.html", {
+        "request": request,
+        "token": token,
+        "telegram_id": telegram_id
+    })
+
+
+@app.post("/form/submit")
+async def submit_form(request: Request):
+    """Обрабатывает отправку формы"""
+    try:
+        data = await request.json()
+        token = data.get("token")
+        telegram_id = data.get("telegram_id")
+        form_data = data.get("form_data", {})
+        
+        if not token or not telegram_id:
+            logger.warning("⚠️ Отсутствуют обязательные параметры в запросе формы")
+            return {"success": False, "message": "Отсутствуют обязательные параметры"}
+        
+        # Проверяем токен
+        from db import get_user_by_form_token, mark_form_as_filled, is_form_filled
+        user_data = await get_user_by_form_token(token)
+        
+        if not user_data:
+            logger.warning(f"⚠️ Неверный токен в запросе формы: {token}")
+            return {"success": False, "message": "Неверный токен"}
+        
+        user_telegram_id, form_filled = user_data
+        
+        if user_telegram_id != telegram_id:
+            logger.warning(f"⚠️ Неверный telegram_id в запросе формы: {telegram_id} (ожидался {user_telegram_id})")
+            return {"success": False, "message": "Неверный идентификатор пользователя"}
+        
+        if form_filled:
+            logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
+            return {"success": True, "message": "Форма уже была заполнена ранее"}
+        
+        # Отмечаем форму как заполненную
+        await mark_form_as_filled(telegram_id)
+        logger.info(f"✅ Форма отмечена как заполненная для пользователя {telegram_id}")
+        
+        # Логируем данные формы
+        logger.info(f"📋 Данные формы для {telegram_id}: {form_data}")
+        
+        # Сохраняем данные формы в таблицу для ежедневной сводки
+        try:
+            await save_form_to_daily_table(telegram_id, form_data)
+        except Exception as save_error:
+            logger.warning(f"⚠️ Ошибка при сохранении данных формы в таблицу: {save_error}")
+        
+        # Отправляем данные формы на email
+        try:
+            await send_form_data_email(telegram_id, form_data)
+        except Exception as email_error:
+            logger.warning(f"⚠️ Ошибка при отправке данных формы на email: {email_error}")
+        
+        # Сохраняем данные формы в Excel и отправляем на email
+        try:
+            excel_path = await save_form_data_to_excel(telegram_id, form_data)
+            if excel_path:
+                await send_excel_file_email(excel_path)
+                # Удаляем временный файл после отправки
+                try:
+                    os.remove(excel_path)
+                    logger.info(f"🗑️ Временный Excel файл удален: {excel_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ Не удалось удалить временный файл: {cleanup_error}")
+        except Exception as excel_error:
+            logger.warning(f"⚠️ Ошибка при сохранении данных формы в Excel: {excel_error}")
+        
+        # Отправляем уведомление в бот (копируем логику из yandex_form_webhook)
+        try:
+            from config import is_bonus_week_active
+            bonus_week_active = is_bonus_week_active()
+            logger.info(f"🔍 После заполнения формы для {telegram_id}: bonus_week_active={bonus_week_active}")
+            
+            updated_menu = await get_main_menu_for_user(telegram_id)
+            
+            await safe_send_message(
+                bot=bot,
+                chat_id=telegram_id,
+                text=(
+                    "✅ <b>Отлично! Данные получены</b>\n\n"
+                    "Ваша форма успешно заполнена и обработана.\n"
+                    "Теперь вы можете пользоваться ботом. Выберите действие в меню 👇"
+                ),
+                parse_mode="HTML",
+                reply_markup=updated_menu
+            )
+            logger.info(f"✅ Уведомление с обновленным меню отправлено пользователю {telegram_id}")
+        except Exception as notify_error:
+            logger.warning(f"⚠️ Не удалось отправить уведомление пользователю {telegram_id}: {notify_error}")
+        
+        return {"success": True, "message": "Форма успешно отправлена"}
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обработке формы: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "message": "Внутренняя ошибка сервера"}
 
 
 @app.post("/yandex-form/webhook")
@@ -433,10 +1318,27 @@ async def init_webhook_tables():
             FOREIGN KEY (telegram_user_id) REFERENCES approved_users(telegram_user_id)
         )
     """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS daily_form_submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            username TEXT,
+            name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            email TEXT NOT NULL,
+            city TEXT NOT NULL,
+            gender TEXT NOT NULL,
+            activity TEXT NOT NULL,
+            privacy_accepted INTEGER DEFAULT 0,
+            offer_accepted INTEGER DEFAULT 0,
+            submitted_at TEXT NOT NULL
+        )
+    """)
         # Создаем индексы для оптимизации
         await db.execute("CREATE INDEX IF NOT EXISTS idx_invite_links_user_id ON invite_links(telegram_user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_invite_links_revoked ON invite_links(revoked)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_processed_payments_at ON processed_payments(processed_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_daily_form_submissions_at ON daily_form_submissions(submitted_at)")
         await db.commit()
 
 
