@@ -388,7 +388,24 @@ async def cmd_start(message: Message):
             minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
             
             if days_left > 0:
-                time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+                # Правильное склонение дней
+                if days_left == 1:
+                    days_text = "1 день"
+                elif 2 <= days_left <= 4:
+                    days_text = f"{days_left} дня"
+                else:
+                    days_text = f"{days_left} дней"
+                
+                # Добавляем часы и минуты, если они есть
+                parts = [days_text]
+                if hours_left > 0:
+                    hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+                    parts.append(hours_text)
+                if minutes_left > 0:
+                    minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                    parts.append(minutes_text)
+                
+                time_left_text = " ".join(parts)
             elif hours_left > 0:
                 # Показываем часы и минуты
                 hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
@@ -885,7 +902,24 @@ async def bonus_week_info(message: Message):
         minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
         
         if days_left > 0:
-            time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+            # Правильное склонение дней
+            if days_left == 1:
+                days_text = "1 день"
+            elif 2 <= days_left <= 4:
+                days_text = f"{days_left} дня"
+            else:
+                days_text = f"{days_left} дней"
+            
+            # Добавляем часы и минуты, если они есть
+            parts = [days_text]
+            if hours_left > 0:
+                hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+                parts.append(hours_text)
+            if minutes_left > 0:
+                minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                parts.append(minutes_text)
+            
+            time_left_text = " ".join(parts)
         elif hours_left > 0:
             # Показываем часы и минуты
             hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
@@ -1622,7 +1656,24 @@ async def manage_subscription(message: Message):
             minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
             
             if days_left > 0:
-                time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+                # Правильное склонение дней
+                if days_left == 1:
+                    days_text = "1 день"
+                elif 2 <= days_left <= 4:
+                    days_text = f"{days_left} дня"
+                else:
+                    days_text = f"{days_left} дней"
+                
+                # Добавляем часы и минуты, если они есть
+                parts = [days_text]
+                if hours_left > 0:
+                    hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+                    parts.append(hours_text)
+                if minutes_left > 0:
+                    minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                    parts.append(minutes_text)
+                
+                time_left_text = " ".join(parts)
             elif hours_left > 0:
                 # Показываем часы и минуты
                 hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
@@ -1808,7 +1859,24 @@ async def disable_auto_renewal_bonus_week(message: Message):
         minutes_left = int((time_until_bonus_end.total_seconds() % 3600) / 60)
         
         if days_left > 0:
-            time_left_text = f"{days_left} день{'а' if 2 <= days_left <= 4 else 'ей'}"
+            # Правильное склонение дней
+            if days_left == 1:
+                days_text = "1 день"
+            elif 2 <= days_left <= 4:
+                days_text = f"{days_left} дня"
+            else:
+                days_text = f"{days_left} дней"
+            
+            # Добавляем часы и минуты, если они есть
+            parts = [days_text]
+            if hours_left > 0:
+                hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
+                parts.append(hours_text)
+            if minutes_left > 0:
+                minutes_text = f"{minutes_left} минут{'ы' if 2 <= minutes_left <= 4 else ''}"
+                parts.append(minutes_text)
+            
+            time_left_text = " ".join(parts)
         elif hours_left > 0:
             # Показываем часы и минуты
             hours_text = f"{hours_left} час" if hours_left == 1 else (f"{hours_left} часа" if 2 <= hours_left <= 4 else f"{hours_left} часов")
