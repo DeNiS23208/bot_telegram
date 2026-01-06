@@ -263,9 +263,10 @@ async def get_subscription_info(telegram_id: int) -> Optional[dict]:
     return result
 
 
-async def activate_subscription_days(telegram_id: int, days: int = 30) -> tuple[datetime, datetime]:
-    """Активирует подписку на N дней (оптимизированная версия)"""
-    starts_at = datetime.utcnow()
+async def activate_subscription_days(telegram_id: int, days: float = 30.0) -> tuple[datetime, datetime]:
+    """Активирует подписку на N дней (поддерживает float для минут)"""
+    from datetime import timezone
+    starts_at = datetime.now(timezone.utc)
     expires_at = starts_at + timedelta(days=days)
     
     async with aiosqlite.connect(DB_PATH) as db:
@@ -704,13 +705,22 @@ async def get_or_create_form_token(telegram_id: int) -> str:
         return token
 
 
-async def is_form_filled(telegram_id: int) -> bool:
-    """Проверяет, заполнена ли форма пользователем"""
-    cache_key = f"form_filled_{telegram_id}"
-    cached = _get_cached(cache_key)
-    if cached is not None:
-        return cached
+async def is_form_filled(telegram_id: int, force_refresh: bool = False) -> bool:
+    """Проверяет, заполнена ли форма пользователем
     
+    Args:
+        telegram_id: ID пользователя
+        force_refresh: Если True, игнорирует кэш и читает из БД (для синхронизации между процессами)
+    """
+    cache_key = f"form_filled_{telegram_id}"
+    
+    # Если не требуется принудительное обновление, проверяем кэш
+    if not force_refresh:
+        cached = _get_cached(cache_key)
+        if cached is not None:
+            return cached
+    
+    # Читаем из БД (всегда актуальные данные)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT form_filled FROM users WHERE telegram_id = ?",
@@ -719,6 +729,7 @@ async def is_form_filled(telegram_id: int) -> bool:
         row = await cursor.fetchone()
         
         result = bool(row and row[0] == 1) if row else False
+        # ВСЕГДА кэшируем результат (даже при force_refresh), чтобы следующий запрос был быстрым
         _set_cached(cache_key, result)
         return result
 
@@ -747,5 +758,68 @@ async def mark_form_as_filled(telegram_id: int) -> None:
         )
         await db.commit()
         
-        _clear_cache()  # Очищаем кэш
+        # Очищаем кэш для этого конкретного пользователя
+        cache_key = f"form_filled_{telegram_id}"
+        if cache_key in _cache:
+            del _cache[cache_key]
+        
+        # Также очищаем весь кэш на всякий случай
+        _clear_cache()
+        
+        # Сразу устанавливаем правильное значение в кэш
+        _set_cached(cache_key, True)
+
+
+async def get_users_list() -> list[dict]:
+    """Получает список всех пользователей с их статусом подписки и никнеймами"""
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            SELECT 
+                u.telegram_id,
+                u.username,
+                s.expires_at,
+                s.starts_at,
+                s.auto_renewal_enabled
+            FROM users u
+            LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id
+            ORDER BY 
+                CASE 
+                    WHEN s.expires_at IS NOT NULL AND datetime(s.expires_at) > datetime(?) THEN 1
+                    ELSE 2
+                END,
+                s.expires_at DESC,
+                u.created_at DESC
+        """, (now.isoformat(),))
+        
+        rows = await cursor.fetchall()
+        
+        users_list = []
+        for row in rows:
+            telegram_id, username, expires_at_str, starts_at_str, auto_renewal_enabled = row
+            
+            # Определяем статус подписки
+            is_active = False
+            expires_at = None
+            if expires_at_str:
+                try:
+                    expires_at = datetime.fromisoformat(expires_at_str)
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    is_active = expires_at > now
+                except (ValueError, TypeError):
+                    pass
+            
+            users_list.append({
+                'telegram_id': telegram_id,
+                'username': username or 'Нет никнейма',
+                'is_active': is_active,
+                'expires_at': expires_at,
+                'starts_at': starts_at_str,
+                'auto_renewal_enabled': bool(auto_renewal_enabled) if auto_renewal_enabled is not None else False
+            })
+        
+        return users_list
 

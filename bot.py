@@ -32,13 +32,13 @@ from db import (
     get_invite_link,
     is_form_filled,
     get_or_create_form_token,
+    get_users_list,
 )
 from utils import format_datetime_moscow
 from payments import create_payment, get_payment_status, get_payment_url
 from config import (
     PAYMENT_LINK_VALID_MINUTES,
     SUBSCRIPTION_DAYS,
-    PAYMENT_AMOUNT_RUB,
     MAX_VIDEO_SIZE_MB,
     MAX_ANIMATION_SIZE_MB,
     MAX_ANIMATION_DURATION_SECONDS,
@@ -198,9 +198,13 @@ async def check_form_filled_and_block(telegram_id: int, message: Message) -> boo
     Проверяет, заполнена ли форма. Если нет - отправляет сообщение с кнопкой и возвращает True (блокирует действие).
     Если форма заполнена - возвращает False (разрешает действие).
     """
-    form_filled = await is_form_filled(telegram_id)
+    # ВСЕГДА читаем из БД (force_refresh=True) чтобы получить актуальные данные
+    # Это важно, так как webhook может обновить статус формы в другом процессе
+    form_filled = await is_form_filled(telegram_id, force_refresh=True)
+    print(f"🔍 check_form_filled_and_block для {telegram_id}: form_filled={form_filled}")
     if not form_filled:
-        # Получаем токен для формы
+        print(f"🚫 Форма НЕ заполнена для {telegram_id}, блокируем действие")
+        # Получаем уникальный токен для формы
         form_token = await get_or_create_form_token(telegram_id)
         # Формируем ссылку на форму с токеном
         form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
@@ -218,7 +222,126 @@ async def check_form_filled_and_block(telegram_id: int, message: Message) -> boo
             reply_markup=form_keyboard
         )
         return True  # Блокируем действие
+    print(f"✅ Форма заполнена для {telegram_id}, разрешаем действие")
     return False  # Разрешаем действие
+
+
+@dp.message(Command("reset_bot"))
+async def cmd_reset_bot(message: Message):
+    """Команда для перезапуска бота и очистки базы данных"""
+    import subprocess
+    
+    try:
+        # Отправляем сообщение о начале процесса
+        await message.answer("🔄 Перезапуск бота и очистка базы данных...")
+        
+        # Очищаем базу данных
+        result = subprocess.run(
+            ["bash", "/opt/bot_telegram/reset_db_for_tests.sh"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            await message.answer(f"⚠️ Ошибка при очистке базы: {result.stderr}")
+            return
+        
+        # Перезапускаем сервисы
+        subprocess.run(
+            ["systemctl", "restart", "telegram-bot"],
+            capture_output=True,
+            timeout=10
+        )
+        
+        subprocess.run(
+            ["systemctl", "restart", "webhook"],
+            capture_output=True,
+            timeout=10
+        )
+        
+        # Ждем немного для запуска сервисов
+        await asyncio.sleep(2)
+        
+        # Отправляем финальное сообщение
+        await message.answer(
+            "✅ <b>Бот перезагружен</b>\n"
+            "✅ <b>Базы данных очищены</b>\n\n"
+            "🗑️ <b>Удалите диалог с ботом для нового тестирования</b>",
+            parse_mode="HTML"
+        )
+        
+    except subprocess.TimeoutExpired:
+        await message.answer("⏱️ Процесс занял слишком много времени, но возможно выполнен. Проверьте вручную.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
+
+
+@dp.message(Command("user_list"))
+async def cmd_user_list(message: Message):
+    """Команда для получения списка пользователей с их статусом доступа"""
+    # Обновляем username пользователя
+    await ensure_user(message.from_user.id, message.from_user.username)
+    
+    try:
+        # Получаем список пользователей
+        users_list = await get_users_list()
+        
+        if not users_list:
+            await message.answer("📋 <b>Список пользователей пуст</b>", parse_mode="HTML")
+            return
+        
+        # Разделяем на активных и неактивных
+        active_users = [u for u in users_list if u['is_active']]
+        expired_users = [u for u in users_list if not u['is_active']]
+        
+        # Формируем сообщение
+        text_parts = []
+        
+        # Активные пользователи
+        if active_users:
+            text_parts.append(f"✅ <b>Активный доступ ({len(active_users)}):</b>\n")
+            for user in active_users:
+                username_display = f"@{user['username']}" if user['username'] != 'Нет никнейма' else user['username']
+                expires_str = format_datetime_moscow(user['expires_at']) if user['expires_at'] else "неизвестно"
+                auto_renewal = "🔄" if user['auto_renewal_enabled'] else ""
+                text_parts.append(f"• {username_display} (ID: {user['telegram_id']}) {auto_renewal}\n  Доступ до: {expires_str}")
+            text_parts.append("")
+        
+        # Неактивные пользователи
+        if expired_users:
+            text_parts.append(f"❌ <b>Доступ истек ({len(expired_users)}):</b>\n")
+            for user in expired_users:
+                username_display = f"@{user['username']}" if user['username'] != 'Нет никнейма' else user['username']
+                expires_str = format_datetime_moscow(user['expires_at']) if user['expires_at'] else "не было подписки"
+                text_parts.append(f"• {username_display} (ID: {user['telegram_id']})\n  Истек: {expires_str}")
+        
+        # Общая статистика
+        text_parts.append(f"\n📊 <b>Всего пользователей:</b> {len(users_list)}")
+        text_parts.append(f"✅ Активных: {len(active_users)}")
+        text_parts.append(f"❌ Истекших: {len(expired_users)}")
+        
+        result_text = "\n".join(text_parts)
+        
+        # Telegram ограничивает длину сообщения до 4096 символов
+        if len(result_text) > 4096:
+            # Разбиваем на несколько сообщений
+            chunk = ""
+            for part in text_parts:
+                if len(chunk) + len(part) + 1 > 4000:  # Оставляем запас
+                    await message.answer(chunk, parse_mode="HTML")
+                    chunk = part + "\n"
+                else:
+                    chunk += part + "\n"
+            if chunk:
+                await message.answer(chunk, parse_mode="HTML")
+        else:
+            await message.answer(result_text, parse_mode="HTML")
+            
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при получении списка пользователей: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 
 @dp.message(Command("start"))
@@ -303,8 +426,8 @@ async def cmd_start(message: Message):
             f"• До окончания бонусной недели осталось: <b>{time_left_text}</b>\n\n"
             f"🔄 <b>После окончания бонусной недели:</b>\n"
             f"• Произойдет автоматическое продление на полную стоимость доступа\n"
-            f"• Стоимость: <b>2990 рублей</b>\n"
-            f"• Срок доступа: <b>30 дней</b>\n\n"
+            f"• Стоимость: <b>{get_production_subscription_price()} рублей</b>\n"
+            f"• Срок доступа: <b>{format_subscription_duration(get_production_subscription_duration())}</b>\n\n"
             f"⚙️ <b>Важно:</b> Автопродление можно будет отключить в любой момент в меню «Управление доступом».\n\n"
             f"⏰ <b>Бонусная неделя действует ограниченное время!</b>\n\n"
             "Выберите действие в меню ниже 👇"
@@ -631,27 +754,6 @@ async def cmd_start(message: Message):
             welcome_text,
             parse_mode="HTML",
             reply_markup=await main_menu(message.from_user.id),
-        )
-    
-    # Проверяем, заполнена ли форма
-    form_filled = await is_form_filled(message.from_user.id)
-    if not form_filled:
-        # Получаем токен для формы
-        form_token = await get_or_create_form_token(message.from_user.id)
-        # Формируем ссылку на форму с токеном
-        form_url = f"https://forms.yandex.ru/u/69592c7e068ff04fd8f00241/?token={form_token}"
-        
-        # Создаем inline кнопку для перехода на форму
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        form_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Заполнить данные", url=form_url)]
-        ])
-        
-        await message.answer(
-            "📝 <b>Для продолжения необходимо заполнить данные</b>\n\n"
-            "Пожалуйста, заполните форму, чтобы продолжить пользоваться ботом.",
-            parse_mode="HTML",
-            reply_markup=form_keyboard
         )
 
 
@@ -1031,7 +1133,7 @@ async def bonus_week_pay(message: Message, is_callback: bool = False):
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "⚠️ <b>ВАЖНО:</b> После окончания бонусной недели:\n"
         "• Ваш доступ в канал закончится\n"
-        "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+        f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
         "• Автопродление можно отключить в меню «Управление доступом»\n\n"
         "💳 <b>Сохранение карты:</b>\n"
         "На форме оплаты вам будет предложено сохранить данные карты для автопродления.\n"
@@ -1135,12 +1237,17 @@ async def pay(message: Message):
     
     # Создаем новый платеж, если активного нет
     return_url_with_user = get_return_url(message.from_user.id)
+    
+    # ВАЖНО: Используем текущую цену и длительность из config (учитывает бонусную неделю или продакшн)
+    current_price = get_current_subscription_price()
+    current_duration = get_current_subscription_duration()
+    
     # Пытаемся создать платеж с возможностью сохранения способа оплаты для автопродления
     # Если магазин не настроен для автоплатежей, платеж будет создан без этого параметра
     payment_id, pay_url = await maybe_await(
         create_payment,
-        amount_rub=PAYMENT_AMOUNT_RUB,
-        description=f"Доступ к каналу ({format_subscription_duration(SUBSCRIPTION_DAYS)})",
+        amount_rub=current_price,
+        description=f"Доступ к каналу ({format_subscription_duration(current_duration)})",
         return_url=return_url_with_user,
         customer_email=CUSTOMER_EMAIL,
         telegram_user_id=message.from_user.id,  # ✅ КРИТИЧНО
@@ -1150,7 +1257,7 @@ async def pay(message: Message):
     await save_payment(message.from_user.id, payment_id, status="pending")
 
     # Правильное склонение для рублей (используем один раз для кнопки и сообщения)
-    amount_float = float(PAYMENT_AMOUNT_RUB)
+    amount_float = float(current_price)
     if amount_float == 1:
         ruble_text = "рубль"
         ruble_text_btn = "1₽"
@@ -1167,8 +1274,8 @@ async def pay(message: Message):
 
     subscription_text = (
         "💰 <b>Оформление доступа</b>\n\n"
-        f"💎 <b>Стоимость:</b> {format_subscription_duration(SUBSCRIPTION_DAYS)} — {PAYMENT_AMOUNT_RUB} {ruble_text}\n\n"
-        f"🔄 <b>Автопродление:</b> каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}\n\n"
+        f"💎 <b>Стоимость:</b> {format_subscription_duration(current_duration)} — {current_price} {ruble_text}\n\n"
+        f"🔄 <b>Автопродление:</b> каждые {format_subscription_duration(current_duration)}\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "💳 <b>Сохранение карты:</b>\n"
         "На форме оплаты вам будет предложено сохранить данные карты для автопродления.\n"
@@ -1529,7 +1636,7 @@ async def manage_subscription(message: Message):
             if auto_renewal_enabled:
                 bonus_warning += (
                     "⚠️ <b>После окончания бонусной недели:</b>\n"
-                    "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+                    f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
                     "• Автопродление можно отключить до окончания бонусной недели\n\n"
                 )
             else:

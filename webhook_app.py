@@ -187,198 +187,55 @@ async def yandex_form_webhook(request: Request):
         # Структура: {"jsonrpc": "2.0", "method": "...", "params": {...}, "id": ...}
         # Или может быть обычный JSON с данными формы
         
-        # Пытаемся получить токен из разных мест
+        # ПРОСТАЯ ЛОГИКА: Ищем токен, находим пользователя, отмечаем форму как заполненную
         token = None
+        telegram_id = None
         
-        # 1. СНАЧАЛА из query параметров URL
+        # 1. Ищем токен в URL
         token = request.query_params.get("token")
-        
-        # Проверяем, что токен не является шаблоном {{token}} или {{url.token}}
-        if token and (token.strip() in ["{{token}}", "{{url.token}}", "%7B%7Btoken%7D%7D", "%7B%7Burl.token%7D%7D"]):
+        if token and token.strip() in ["{{token}}", "{{url.token}}", "%7B%7Btoken%7D%7D", "%7B%7Burl.token%7D%7D"]:
             logger.warning(f"⚠️ Получен шаблон {token} в URL - Яндекс.Формы не заменил переменную")
             token = None
         
-        # 2. Из JSON-RPC params (основной способ для JSON-RPC POST)
-        if not token and isinstance(data, dict):
-            if "params" in data:
-                params = data["params"]
-                # Пытаемся извлечь токен из params
-                if isinstance(params, dict):
-                    # Сначала проверяем, есть ли вложенный params с токеном (как строка JSON)
-                    if "params" in params:
-                        params_str = params.get("params", "")
-                        if isinstance(params_str, str):
-                            try:
-                                import json
-                                # Пытаемся распарсить строку JSON
-                                params_dict = json.loads(params_str)
-                                token = params_dict.get("token") or params_dict.get("form_token")
-                                logger.info(f"🔑 Извлечен токен из params.params (строка JSON): {token[:10]}..." if token else "❌ Токен не найден в params.params")
-                            except json.JSONDecodeError as e:
-                                logger.warning(f"⚠️ Не удалось распарсить params.params как JSON: {e}")
-                            except Exception as e:
-                                logger.warning(f"⚠️ Ошибка при обработке params.params: {e}")
-                    
-                    # Если не нашли, ищем токен напрямую в params
-                    if not token:
-                        token = params.get("token") or params.get("form_token")
-                        if token:
-                            logger.info(f"🔑 Извлечен токен из params напрямую: {token[:10]}...")
-                    
-                    # Проверяем, что токен не является шаблоном
-                    if token and token.strip() == "{{token}}":
-                        logger.warning("⚠️ Получен шаблон {{token}} в params - Яндекс.Формы не заменил переменную")
-                        token = None
-                elif isinstance(params, str):
-                    # Если params - это строка JSON, пытаемся распарсить
-                    try:
-                        import json
-                        params_dict = json.loads(params)
-                        token = params_dict.get("token") or params_dict.get("form_token")
-                        if token:
-                            logger.info(f"🔑 Извлечен токен из params (строка JSON): {token[:10]}...")
-                        # Проверяем, что токен не является шаблоном
-                        if token and token.strip() == "{{token}}":
-                            token = None
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось распарсить params как JSON: {e}")
-            
-            # 3. Из корня JSON (если не JSON-RPC, обычный POST)
-            if not token:
-                token = data.get("token") or data.get("form_token")
-                # Проверяем, что токен не является шаблоном
+        # 2. Ищем токен в params
+        if not token and isinstance(data, dict) and "params" in data:
+            params = data["params"]
+            if isinstance(params, dict):
+                token = params.get("token") or params.get("form_token")
                 if token and token.strip() in ["{{token}}", "{{url.token}}"]:
-                    logger.warning(f"⚠️ Получен шаблон {token} в теле запроса - Яндекс.Формы не заменил переменную")
+                    logger.warning(f"⚠️ Получен шаблон {token} в params - Яндекс.Формы не заменил переменную")
                     token = None
-                elif token:
-                    logger.info(f"🔑 Извлечен токен из корня JSON: {token[:10]}...")
         
-        # Извлекаем данные из формы ДО поиска пользователя, чтобы использовать email для идентификации
-        # Структура может быть разной в зависимости от настроек формы
-        form_data = {}
-        answers = {}
+        # 3. Ищем токен в корне JSON
+        if not token and isinstance(data, dict):
+            token = data.get("token") or data.get("form_token")
+            if token and token.strip() in ["{{token}}", "{{url.token}}"]:
+                logger.warning(f"⚠️ Получен шаблон {token} в корне JSON - Яндекс.Формы не заменил переменную")
+                token = None
         
-        if isinstance(data, dict):
-            # Если это JSON-RPC, данные в params
-            if "params" in data:
-                params = data["params"]
-                
-                # Пытаемся извлечь answers из params
-                if isinstance(params, dict):
-                    # Пробуем найти answers или answer (на случай опечатки)
-                    answers = params.get("answers") or params.get("answer", {})
-                    
-                    # Если answers - это строка, пытаемся распарсить
-                    if isinstance(answers, str):
-                        if answers.strip() in ["{{answers}}", "{{answers}}"]:
-                            logger.warning("⚠️ Получен шаблон {{answers}} вместо данных - Яндекс.Формы не заменил переменную")
-                            # Если шаблон не заменен, используем все параметры кроме служебных
-                            answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
-                            # Если все еще пусто, используем весь params
-                            if not answers:
-                                answers = params
-                        else:
-                            # Пытаемся распарсить как JSON
-                            try:
-                                import json
-                                answers = json.loads(answers)
-                            except:
-                                # Если не JSON, используем как есть или все params
-                                if not answers or answers == "":
-                                    answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
-                                    if not answers:
-                                        answers = params
-                    
-                    # Если answers пустой или это шаблон, используем все params (кроме служебных)
-                    if not answers or answers == {}:
-                        answers = {k: v for k, v in params.items() if k not in ["token", "form_token", "params.answers", "jsonrpc", "method", "id", "answer", "answers"]}
-                        # Если все еще пусто, используем весь params
-                        if not answers:
-                            answers = params
-                elif isinstance(params, str):
-                    try:
-                        import json
-                        params_dict = json.loads(params)
-                        answers = params_dict.get("answers", params_dict)
-                    except:
-                        pass
-            else:
-                # Если не JSON-RPC, данные в корне
-                # Если data - это уже объект answers (когда в теле запроса просто {{answers}})
-                if "answers" in data:
-                    answers = data.get("answers", {})
-                else:
-                    # Если data - это сам объект answers (без обертки)
-                    answers = data
-            
-            # Извлекаем поля формы
-            if isinstance(answers, dict):
-                form_data = {
-                    "name": str(answers.get("name") or answers.get("имя") or "").strip(),
-                    "phone": str(answers.get("phone") or answers.get("телефон") or "").strip(),
-                    "email": str(answers.get("email") or answers.get("почта") or "").strip(),
-                    "gender": str(answers.get("gender") or answers.get("пол") or "").strip(),
-                    "city": str(answers.get("city") or answers.get("город") or answers.get("город проживания") or "").strip(),
-                    "activity": str(answers.get("activity") or answers.get("деятельность") or answers.get("направление деятельности") or "").strip()
-                }
-            else:
-                form_data = {
-                    "name": "", "phone": "", "email": "", "gender": "", "city": "", "activity": ""
-                }
-        
-        # Используем функции из db.py
-        from db import get_user_by_form_token, mark_form_as_filled
-        
-        telegram_id = None
-        form_filled = False
-        
-        # 1. Пытаемся найти пользователя по токену (если токен есть и не является шаблоном)
+        # 4. Находим пользователя по токену
         if token:
+            from db import get_user_by_form_token
             user_data = await get_user_by_form_token(token)
             if user_data:
                 telegram_id, form_filled = user_data
                 logger.info(f"✅ Пользователь найден по токену: {telegram_id}")
         
-        # 2. Если не нашли по токену, пытаемся найти по email
-        if not telegram_id and form_data.get("email"):
-            email = form_data["email"]
-            async with aiosqlite.connect(DB_PATH) as db:
-                cursor = await db.execute(
-                    "SELECT telegram_id FROM form_data WHERE email = ? ORDER BY submitted_at DESC LIMIT 1",
-                    (email,)
-                )
-                row = await cursor.fetchone()
-                if row:
-                    telegram_id = row[0]
-                    # Проверяем, заполнена ли форма
-                    cursor = await db.execute(
-                        "SELECT form_filled FROM users WHERE telegram_id = ?",
-                        (telegram_id,)
-                    )
-                    row = await cursor.fetchone()
-                    form_filled = bool(row and row[0] == 1) if row else False
-                    logger.info(f"✅ Пользователь найден по email: {telegram_id}")
-        
-        # 3. Если не нашли по токену и email, используем последнего пользователя, который не заполнил форму
-        # И который создал форму недавно (за последние 10 минут)
-        # Это временное решение, так как Яндекс.Формы не передает токен
+        # Если токен не найден, используем fallback - ищем последнего пользователя
         if not telegram_id:
-            logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
-            logger.info("🔍 Пытаемся найти последнего пользователя, который не заполнил форму (за последние 10 минут)...")
+            logger.warning("⚠️ Токен не найден. Используем fallback - ищем последнего пользователя, который недавно нажал кнопку.")
             from datetime import datetime, timedelta, timezone
-            ten_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+            thirty_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
             async with aiosqlite.connect(DB_PATH) as db:
                 cursor = await db.execute(
                     "SELECT telegram_id FROM users WHERE form_filled = 0 AND created_at > ? ORDER BY created_at DESC LIMIT 1",
-                    (ten_minutes_ago,)
+                    (thirty_minutes_ago,)
                 )
                 row = await cursor.fetchone()
                 if row:
                     telegram_id = row[0]
-                    logger.info(f"✅ Найден последний пользователь без заполненной формы (за последние 10 минут): {telegram_id}")
+                    logger.info(f"✅ Найден последний пользователь без заполненной формы (за последние 30 минут): {telegram_id}")
                 else:
-                    # Если не нашли за последние 10 минут, ищем просто последнего
-                    logger.info("🔍 Не найден пользователь за последние 10 минут, ищем последнего...")
                     cursor = await db.execute(
                         "SELECT telegram_id FROM users WHERE form_filled = 0 ORDER BY created_at DESC LIMIT 1",
                     )
@@ -386,21 +243,18 @@ async def yandex_form_webhook(request: Request):
                     if row:
                         telegram_id = row[0]
                         logger.info(f"✅ Найден последний пользователь без заполненной формы: {telegram_id}")
-                    else:
-                        logger.error("❌ Не найден ни один пользователь без заполненной формы")
-                        return {
-                            "jsonrpc": "2.0",
-                            "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
-                            "id": data.get("id") if isinstance(data, dict) else None
-                        }
         
         if not telegram_id:
-            logger.warning(f"⚠️ Пользователь не найден ни по токену, ни по email. Токен: {token}, Email: {form_data.get('email', 'не указан')}")
+            logger.error("❌ Пользователь не найден")
             return {
                 "jsonrpc": "2.0",
                 "error": {"code": -32602, "message": "Пользователь не найден. Убедитесь, что вы перешли по ссылке из бота."},
                 "id": data.get("id") if isinstance(data, dict) else None
             }
+        
+        # Проверяем, заполнена ли форма
+        from db import mark_form_as_filled, is_form_filled
+        form_filled = await is_form_filled(telegram_id)
         
         if form_filled:
             logger.info(f"ℹ️ Форма уже была заполнена для пользователя {telegram_id}")
@@ -410,48 +264,27 @@ async def yandex_form_webhook(request: Request):
                 "id": data.get("id") if isinstance(data, dict) else None
             }
         
-        # Сохраняем данные формы в БД
-        async with aiosqlite.connect(DB_PATH) as db:
-            # Создаем таблицу для данных формы, если её нет
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS form_data (
-                    telegram_id INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    phone TEXT NOT NULL,
-                    email TEXT NOT NULL,
-                    gender TEXT,
-                    city TEXT,
-                    activity TEXT,
-                    submitted_at TEXT NOT NULL,
-                    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
-                )
-            """)
-            
-            # Сохраняем данные формы
-            await db.execute("""
-                INSERT OR REPLACE INTO form_data 
-                (telegram_id, name, phone, email, gender, city, activity, submitted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                telegram_id,
-                form_data.get("name", "").strip(),
-                form_data.get("phone", "").strip(),
-                form_data.get("email", "").strip(),
-                form_data.get("gender", "").strip(),
-                form_data.get("city", "").strip(),
-                form_data.get("activity", "").strip(),
-                datetime.now(timezone.utc).isoformat()
-            ))
-            
-            await db.commit()
-        
-        # Отмечаем форму как заполненную
+        # ПРОСТО ОТМЕЧАЕМ ФОРМУ КАК ЗАПОЛНЕННУЮ - ДАННЫЕ НЕ СОХРАНЯЕМ, ТОЛЬКО ПОДТВЕРЖДЕНИЕ
         await mark_form_as_filled(telegram_id)
+        logger.info(f"✅ Форма отмечена как заполненная для пользователя {telegram_id}")
+        
+        # Дополнительно проверяем, что форма действительно отмечена как заполненная
+        from db import is_form_filled
+        form_filled_check = await is_form_filled(telegram_id)
+        logger.info(f"🔍 Проверка после mark_form_as_filled: form_filled={form_filled_check} для пользователя {telegram_id}")
         
         logger.info(f"✅ Форма заполнена пользователем {telegram_id} через Яндекс.Форму")
         
-        # Отправляем уведомление пользователю в бот
+        # Отправляем уведомление пользователю в бот с обновленным меню
         try:
+            # Получаем обновленное меню (теперь кнопки должны быть разблокированы)
+            # ВАЖНО: Проверяем, активна ли бонусная неделя, чтобы показать правильное меню
+            from config import is_bonus_week_active
+            bonus_week_active = is_bonus_week_active()
+            logger.info(f"🔍 После заполнения формы для {telegram_id}: bonus_week_active={bonus_week_active}")
+            
+            updated_menu = await get_main_menu_for_user(telegram_id)
+            
             await safe_send_message(
                 bot=bot,
                 chat_id=telegram_id,
@@ -460,8 +293,10 @@ async def yandex_form_webhook(request: Request):
                     "Ваша форма успешно заполнена и обработана.\n"
                     "Теперь вы можете пользоваться ботом. Выберите действие в меню 👇"
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=updated_menu
             )
+            logger.info(f"✅ Уведомление с обновленным меню отправлено пользователю {telegram_id}")
         except Exception as notify_error:
             logger.warning(f"⚠️ Не удалось отправить уведомление пользователю {telegram_id}: {notify_error}")
         
@@ -673,11 +508,8 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     attempts = await get_auto_renewal_attempts(telegram_id)
     
     # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено после 3 неудачных попыток,
-    # считаем подписку неактивной для отображения меню, даже если expires_at > now
-    if not auto_renewal_enabled and attempts >= 3:
-        # Все 3 попытки неудачны - показываем меню с "Получить доступ", даже если подписка еще не истекла
-        has_active_subscription = False
-        logger.info(f"🔍 Пользователь {telegram_id}: 3 неудачные попытки, автопродление отключено - показываем меню 'Получить доступ'")
+    # НЕ меняем has_active_subscription здесь - это будет обработано ниже в "боевом режиме"
+    # (логика "боевого режима" будет применена после проверки bonus_week_ended)
     
     # КРИТИЧЕСКИ ВАЖНО: Во время попыток автопродления (attempts > 0 и attempts < 3)
     # считаем, что у пользователя была активная подписка, даже если она уже истекла
@@ -704,15 +536,19 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     auto_renewal_in_progress = auto_renewal_enabled and attempts > 0 and attempts < 3 and bonus_week_ended
     
     # КРИТИЧЕСКИ ВАЖНО: Если автопродление успешно (attempts = 0 и есть активная подписка),
-    # значит автопродление прошло успешно - показываем продакшн меню
+    # значит автопродление прошло успешно - показываем БОЕВОЙ РЕЖИМ (продакшн меню)
     if bonus_week_ended and attempts == 0 and has_active_subscription and auto_renewal_enabled:
-        # Автопродление успешно - показываем продакшн меню
+        # Автопродление успешно - БОЕВОЙ РЕЖИМ
         bonus_week_active = False
-        logger.info(f"🔍 Автопродление успешно завершено для пользователя {telegram_id} - показываем продакшн меню")
+        logger.info(f"⚔️ Автопродление успешно завершено для пользователя {telegram_id} - БОЕВОЙ РЕЖИМ (продакшн меню)")
     elif bonus_week_ended and not auto_renewal_in_progress:
-        # Бонусная неделя закончилась и попытки завершены - показываем продакшн меню
+        # Бонусная неделя закончилась и попытки завершены - БОЕВОЙ РЕЖИМ
+        # ВАЖНО: Это включает случай с 3 неудачными попытками - тоже БОЕВОЙ РЕЖИМ
         bonus_week_active = False
-        logger.info(f"🔍 Бонусная неделя закончилась по времени: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}, попытки завершены")
+        if not auto_renewal_enabled and attempts >= 3:
+            logger.info(f"⚔️ Бонусная неделя закончилась, 3 неудачные попытки для пользователя {telegram_id} - БОЕВОЙ РЕЖИМ")
+        else:
+            logger.info(f"⚔️ Бонусная неделя закончилась по времени: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}, попытки завершены - БОЕВОЙ РЕЖИМ")
     elif auto_renewal_in_progress:
         # Бонусная неделя закончилась, но еще идут попытки автопродления
         # ВАЖНО: Показываем бонусное меню только если у пользователя нет активной подписки
@@ -724,6 +560,9 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
         bonus_week_active = is_bonus_week_active()
         if bonus_week_active:
             logger.info(f"🔍 Бонусная неделя активна: now={now.isoformat()}, bonus_week_end={bonus_week_end.isoformat()}")
+    
+    # Логируем состояние для диагностики
+    logger.info(f"🔍 get_main_menu_for_user для {telegram_id}: bonus_week_active={bonus_week_active}, has_active_subscription={has_active_subscription}, show_manage_button={show_manage_button}, auto_renewal_enabled={auto_renewal_enabled}, attempts={attempts}")
     
     if bonus_week_active:
         # КРИТИЧЕСКИ ВАЖНО: Во время попыток автопродления (auto_renewal_in_progress) 
@@ -774,6 +613,7 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
             # У пользователя нет активной подписки - показываем бонусное меню
             BTN_BONUS_WEEK = "🎁 Бонус в честь запуска канала Наиля Хасанова"
             BTN_ABOUT_1 = "ℹ️ О проекте"
+            logger.info(f"🎁 Пользователь {telegram_id}: показываем БОНУСНОЕ меню (нет подписки, бонусная неделя активна)")
             keyboard = [
                 [KeyboardButton(text=BTN_BONUS_WEEK)],
                 [KeyboardButton(text=BTN_ABOUT_1)],
@@ -805,27 +645,42 @@ async def get_main_menu_for_user(telegram_id: int) -> ReplyKeyboardMarkup:
     # Проверяем, включено ли автопродление
     auto_renewal_enabled = await is_auto_renewal_enabled(telegram_id)
     
-    # КРИТИЧЕСКИ ВАЖНО: Если автопродление отключено после 3 неудачных попыток,
-    # считаем подписку неактивной для отображения меню, даже если expires_at > now
+    # КРИТИЧЕСКИ ВАЖНО: Определяем БОЕВОЙ РЕЖИМ
+    # БОЕВОЙ РЕЖИМ активируется если бонусная неделя закончилась
+    # В боевом режиме ВСЕГДА показываем полное продакшн меню
     attempts = await get_auto_renewal_attempts(telegram_id)
-    if not auto_renewal_enabled and attempts >= 3:
-        # Все 3 попытки неудачны - показываем меню с "Получить доступ", даже если подписка еще не истекла
-        has_active_subscription = False
-        logger.info(f"🔍 Пользователь {telegram_id}: 3 неудачные попытки, автопродление отключено - показываем меню 'Получить доступ'")
+    is_battle_mode = bonus_week_ended
+    
+    if is_battle_mode:
+        logger.info(f"⚔️ БОЕВОЙ РЕЖИМ для пользователя {telegram_id}: бонусная неделя закончилась (has_active_subscription={has_active_subscription}, attempts={attempts})")
     
     # Показываем "Управление доступом" только если подписка активна И автопродление включено
     show_manage_button = has_active_subscription and auto_renewal_enabled
     
-    # Если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
-    payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
-    
-    keyboard = [
-        [KeyboardButton(text=payment_button)],
-        [KeyboardButton(text=BTN_STATUS_1)],
-        [KeyboardButton(text=BTN_ABOUT_1)],
-        [KeyboardButton(text=BTN_CHECK_1)],
-        [KeyboardButton(text=BTN_SUPPORT)],
-    ]
+    # В БОЕВОМ РЕЖИМЕ показываем полное продакшн меню
+    if is_battle_mode:
+        # БОЕВОЙ РЕЖИМ: если есть активная подписка - показываем "Управление доступом", иначе "Получить доступ"
+        payment_button = BTN_MANAGE_SUB if has_active_subscription else BTN_PAY_1
+        
+        keyboard = [
+            [KeyboardButton(text=payment_button)],
+            [KeyboardButton(text=BTN_STATUS_1)],
+            [KeyboardButton(text=BTN_ABOUT_1)],
+            [KeyboardButton(text=BTN_CHECK_1)],
+            [KeyboardButton(text=BTN_SUPPORT)],
+        ]
+        logger.info(f"⚔️ БОЕВОЙ РЕЖИМ для пользователя {telegram_id}: показываем полное продакшн меню с '{payment_button}'")
+    else:
+        # Обычный режим: если есть активная подписка с автопродлением - показываем "Управление доступом", иначе "Получить доступ"
+        payment_button = BTN_MANAGE_SUB if show_manage_button else BTN_PAY_1
+        
+        keyboard = [
+            [KeyboardButton(text=payment_button)],
+            [KeyboardButton(text=BTN_STATUS_1)],
+            [KeyboardButton(text=BTN_ABOUT_1)],
+            [KeyboardButton(text=BTN_CHECK_1)],
+            [KeyboardButton(text=BTN_SUPPORT)],
+        ]
     
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -1702,7 +1557,7 @@ async def check_bonus_week_ending_soon():
                                     f"🕐 <b>Окончание бонусной недели:</b> {bonus_end_str}\n"
                                     f"⏰ <b>До окончания бонусной недели осталось:</b> {time_text}\n\n"
                                     f"⚠️ <b>Важно:</b> После окончания бонусной недели:\n"
-                                    f"• Будет автоматически списана полная стоимость: <b>1 рубль на 30 минут</b>\n"
+                                    f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
                                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                                     f"⚙️ Вы можете отключить автопродление в меню «Управление доступом»."
                                 )
@@ -2937,27 +2792,29 @@ async def yookassa_webhook(request: Request):
     from config import get_bonus_week_end, get_bonus_week_start
     now = datetime.now(tz.utc)
     
-    if is_bonus_payment:
-        # Это платеж бонусной недели (1 рубль) - создаем бонусную подписку
-        # ВАЖНО: expires_at должен быть равен bonus_week_end, независимо от того, активна ли сейчас бонусная неделя
-        bonus_week_start = get_bonus_week_start()
-        bonus_end = get_bonus_week_end()
-        # Убеждаемся, что bonus_end имеет timezone
-        if bonus_end.tzinfo is None:
-            bonus_end = bonus_end.replace(tzinfo=tz.utc)
-        if bonus_week_start.tzinfo is None:
-            bonus_week_start = bonus_week_start.replace(tzinfo=tz.utc)
-        
-        # ВАЖНО: Если момент оплаты (now) попадает в диапазон бонусной недели, используем bonus_week_end
-        # Если оплата после окончания, все равно создаем бонусную подписку до bonus_week_end (для обработки автопродления)
+    # КРИТИЧЕСКИ ВАЖНО: Проверяем, закончилась ли бонусная неделя
+    bonus_week_start = get_bonus_week_start()
+    bonus_end = get_bonus_week_end()
+    # Убеждаемся, что bonus_end имеет timezone
+    if bonus_end.tzinfo is None:
+        bonus_end = bonus_end.replace(tzinfo=tz.utc)
+    if bonus_week_start.tzinfo is None:
+        bonus_week_start = bonus_week_start.replace(tzinfo=tz.utc)
+    
+    bonus_week_ended = now > bonus_end
+    
+    if is_bonus_payment and not bonus_week_ended:
+        # Это платеж бонусной недели (1 рубль) И бонусная неделя еще активна - создаем бонусную подписку
+        # ВАЖНО: expires_at должен быть равен bonus_week_end
         remaining_time = bonus_end - now
-        if remaining_time.total_seconds() <= 0:
-            # Оплата после окончания бонусной недели - все равно создаем до bonus_week_end для правильной обработки
-            logger.info(f"⚠️ Оплата после окончания бонусной недели для пользователя {tg_user_id}, но это бонусный платеж - создаем подписку до bonus_week_end")
-        
-        # Конвертируем секунды в дни (может быть отрицательным, но это не важно - используем bonus_week_end напрямую)
         subscription_duration = remaining_time.total_seconds() / 86400 if remaining_time.total_seconds() > 0 else 0
         logger.info(f"🎁 БОНУСНЫЙ платеж для пользователя {tg_user_id}, bonus_week_end={bonus_end.isoformat()}, now={now.isoformat()}, payment_amount={payment_amount}")
+    elif is_bonus_payment and bonus_week_ended:
+        # Это платеж на 1 рубль, но бонусная неделя закончилась - создаем ПРОДАКШН подписку
+        # КРИТИЧЕСКИ ВАЖНО: Не создаем бонусную подписку с expires_at в прошлом!
+        subscription_duration = get_production_subscription_duration()
+        is_bonus_payment = False  # Переопределяем, чтобы не создавать бонусную подписку
+        logger.info(f"⚔️ БОЕВОЙ РЕЖИМ: Платеж на 1 рубль после окончания бонусной недели для пользователя {tg_user_id}, создаем ПРОДАКШН подписку на {format_subscription_duration(subscription_duration)}")
     elif is_bonus_week_active():
         # Бонусная неделя активна, но это не бонусный платеж (не 1 рубль)
         # Это не должно происходить в нормальной работе, но на всякий случай
@@ -2969,17 +2826,18 @@ async def yookassa_webhook(request: Request):
             subscription_duration = remaining_time.total_seconds() / 86400
             logger.info(f"🎁 Бонусная неделя активна для пользователя {tg_user_id}, оставшееся время: {remaining_time.total_seconds() / 60:.1f} минут ({subscription_duration:.6f} дней)")
         else:
-            subscription_duration = SUBSCRIPTION_DAYS
-            logger.info(f"⚠️ Бонусная неделя закончилась для пользователя {tg_user_id}, используем продакшн длительность: {subscription_duration} дней")
+            subscription_duration = get_production_subscription_duration()
+            logger.info(f"⚠️ Бонусная неделя закончилась для пользователя {tg_user_id}, используем продакшн длительность: {format_subscription_duration(subscription_duration)}")
     else:
-        # Продакшн режим: используем обычную длительность
-        subscription_duration = SUBSCRIPTION_DAYS
-        logger.info(f"💼 Продакшн режим для пользователя {tg_user_id}, длительность: {subscription_duration} дней")
+        # Продакшн режим: используем продакшн длительность из config
+        subscription_duration = get_production_subscription_duration()
+        logger.info(f"💼 Продакшн режим для пользователя {tg_user_id}, длительность: {format_subscription_duration(subscription_duration)}")
     
     # ВАЖНО: Для бонусной недели устанавливаем expires_at = bonus_week_end напрямую
     # КРИТИЧЕСКИ ВАЖНО: starts_at должен быть моментом оплаты (now), а не началом бонусной недели
     # expires_at всегда фиксированное время окончания бонусной недели
-    if is_bonus_payment and bonus_end:
+    # НО: если бонусная неделя закончилась, создаем продакшн подписку
+    if is_bonus_payment and bonus_end and not bonus_week_ended:
         # Устанавливаем expires_at = bonus_week_end напрямую, чтобы не было проблем с округлением
         # ВАЖНО: Используем tz.utc, так как мы импортировали timezone как tz выше
         # КРИТИЧЕСКИ ВАЖНО: starts_at = момент оплаты (now), expires_at = фиксированное время окончания бонусной недели
@@ -3007,8 +2865,37 @@ async def yookassa_webhook(request: Request):
             await db_conn.commit()
             logger.info(f"💾 Подписка сохранена в БД (бонусная неделя): telegram_id={tg_user_id}, expires_at={expires_at.isoformat()}, starts_at={starts_at.isoformat()}")
     else:
-        # Для продакшн режима используем обычную активацию
-        await activate_subscription(tg_user_id, days=subscription_duration)
+        # Для продакшн режима используем активацию с правильной длительностью
+        # ВАЖНО: subscription_duration может быть float (минуты), поэтому используем timedelta
+        from datetime import timezone as tz
+        starts_at = now
+        expires_at = starts_at + timedelta(days=subscription_duration)
+        
+        # Убеждаемся, что expires_at > starts_at
+        if expires_at <= starts_at:
+            # Если длительность слишком мала или равна 0, добавляем минимум 1 минуту
+            expires_at = starts_at + timedelta(minutes=1)
+            logger.warning(f"⚠️ Длительность подписки слишком мала, устанавливаем минимум 1 минуту для пользователя {tg_user_id}")
+        
+        async with aiosqlite.connect(DB_PATH) as db_conn:
+            # гарантируем, что юзер существует
+            await db_conn.execute(
+                "INSERT OR IGNORE INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
+                (tg_user_id, None, datetime.now(tz.utc).isoformat())
+            )
+            
+            # upsert подписки (сохраняем дату начала и окончания)
+            await db_conn.execute(
+                """
+                INSERT INTO subscriptions (telegram_id, expires_at, starts_at, subscription_expired_notified)
+                VALUES (?, ?, ?, 0) ON CONFLICT(telegram_id) DO
+                UPDATE SET expires_at=excluded.expires_at, starts_at=excluded.starts_at,
+                           subscription_expired_notified=0
+                """,
+                (tg_user_id, expires_at.isoformat(), starts_at.isoformat())
+            )
+            await db_conn.commit()
+            logger.info(f"💾 Подписка сохранена в БД (продакшн): telegram_id={tg_user_id}, expires_at={expires_at.isoformat()}, starts_at={starts_at.isoformat()}, duration={format_subscription_duration(subscription_duration)}")
     logger.info(f"✅ Подписка активирована для пользователя {tg_user_id} на {format_subscription_duration(subscription_duration)} (тип платежа: {payment_type_name})")
     
     # КРИТИЧЕСКИ ВАЖНО: Очищаем кэш подписки сразу после активации
@@ -3087,13 +2974,13 @@ async def yookassa_webhook(request: Request):
                 auto_renewal_text = (
                     f"🔄 <b>Автопродление включено</b>\n\n"
                     f"⚠️ <b>После окончания бонусной недели:</b>\n"
-                    f"• Будет автоматически списана полная стоимость: <b>1 рубль на 30 минут</b>\n"
-                    f"• Доступ будет автоматически продлеваться каждые <b>30 минут</b>\n"
+                    f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
+                    f"• Доступ будет автоматически продлеваться каждые <b>{format_subscription_duration(get_production_subscription_duration())}</b>\n"
                     f"• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
                 )
             else:
                 auto_renewal_text = (
-                    f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(SUBSCRIPTION_DAYS)}.\n\n"
+                    f"🔄 Доступ будет автоматически продлеваться каждые {format_subscription_duration(get_production_subscription_duration())}.\n\n"
                 )
             
             # Отправляем уведомление о сохранении способа оплаты только один раз
@@ -3171,6 +3058,18 @@ async def yookassa_webhook(request: Request):
         return {"ok": True, "event": "payment.succeeded", "auto_payment": True}
     
     # Ссылка будет одноразовой (member_limit=1) и действительна до окончания подписки
+    # КРИТИЧЕСКИ ВАЖНО: Всегда создаем НОВУЮ ссылку, НЕ используем старую из базы данных
+    # Отзываем старую ссылку, если она есть
+    from db import get_invite_link
+    old_invite_link = await get_invite_link(tg_user_id)
+    if old_invite_link:
+        logger.info(f"🔍 Найдена старая ссылка для пользователя {tg_user_id}, отзываем её перед созданием новой")
+        try:
+            await revoke_invite_link(old_invite_link)
+            logger.info(f"✅ Старая ссылка отозвана для пользователя {tg_user_id}")
+        except Exception as revoke_error:
+            logger.warning(f"⚠️ Не удалось отозвать старую ссылку для пользователя {tg_user_id}: {revoke_error}")
+    
     invite_link = None
     try:
         # Используем expires_at подписки как expire_date ссылки
@@ -3240,7 +3139,7 @@ async def yookassa_webhook(request: Request):
             logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Уникальная ссылка на канал не была создана для пользователя {tg_user_id} после всех попыток!")
             raise Exception(f"Не удалось создать уникальную ссылку на канал для пользователя {tg_user_id}")
         
-        logger.info(f"✅ Создана УНИКАЛЬНАЯ индивидуальная ссылка для пользователя {tg_user_id}, действительна до {link_expire_date} (срок доступа пользователя)")
+        logger.info(f"✅ Создана УНИКАЛЬНАЯ индивидуальная ссылка для пользователя {tg_user_id}, CHANNEL_ID={CHANNEL_ID}, ссылка={invite_link[:50]}..., действительна до {link_expire_date} (срок доступа пользователя)")
     except Exception as e:
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА создания пригласительной ссылки: {e}")
         import traceback
@@ -3256,7 +3155,7 @@ async def yookassa_webhook(request: Request):
                     expire_date=link_expire_date
                 )
                 invite_link = chat_invite.invite_link
-                logger.info(f"✅ Уникальная ссылка создана в последней попытке (с заявкой) для пользователя {tg_user_id}")
+                logger.info(f"✅ Уникальная ссылка создана в последней попытке (с заявкой) для пользователя {tg_user_id}, CHANNEL_ID={CHANNEL_ID}, ссылка={invite_link[:50]}...")
             except Exception:
                 # Если не получилось с заявкой, пробуем с member_limit=1
                 chat_invite = await bot.create_chat_invite_link(
@@ -3266,21 +3165,33 @@ async def yookassa_webhook(request: Request):
                     expire_date=link_expire_date
                 )
                 invite_link = chat_invite.invite_link
-                logger.info(f"✅ Уникальная ссылка создана в последней попытке (одноразовая) для пользователя {tg_user_id}")
+                logger.info(f"✅ Уникальная ссылка создана в последней попытке (одноразовая) для пользователя {tg_user_id}, CHANNEL_ID={CHANNEL_ID}, ссылка={invite_link[:50]}...")
         except Exception as final_error:
             logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать уникальную ссылку даже в последней попытке: {final_error}")
-            # Отправляем сообщение об ошибке, но НЕ прерываем обработку платежа
-            menu = await get_main_menu_for_user(tg_user_id)
-            await safe_send_message(
-                bot=bot,
-                chat_id=tg_user_id,
-                text="✅ <b>Оплата подтверждена!</b>\n\n"
-                "⚠️ Произошла ошибка при создании уникальной ссылки. Пожалуйста, свяжитесь с администратором для получения доступа.",
-                parse_mode="HTML",
-            reply_markup=menu
-        )
-            # НЕ возвращаем ошибку - продолжаем обработку платежа
-            invite_link = None  # Устанавливаем в None, чтобы дальше обработать это
+            # КРИТИЧЕСКИ ВАЖНО: Делаем еще одну финальную попытку создания ссылки БЕЗ expire_date
+            # Это гарантирует, что ссылка будет создана, даже если есть проблемы с датами
+            try:
+                logger.warning(f"⚠️ ФИНАЛЬНАЯ попытка создания ссылки БЕЗ expire_date для пользователя {tg_user_id}")
+                chat_invite = await bot.create_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    creates_join_request=False,
+                    member_limit=1
+                )
+                invite_link = chat_invite.invite_link
+                logger.info(f"✅ Уникальная ссылка создана в ФИНАЛЬНОЙ попытке (без expire_date) для пользователя {tg_user_id}, CHANNEL_ID={CHANNEL_ID}, ссылка={invite_link[:50]}...")
+            except Exception as ultimate_error:
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Даже финальная попытка создания ссылки не удалась: {ultimate_error}")
+                # Если и это не получилось, пробуем создать ссылку БЕЗ ограничений
+                try:
+                    chat_invite = await bot.create_chat_invite_link(
+                        chat_id=CHANNEL_ID,
+                        creates_join_request=False
+                    )
+                    invite_link = chat_invite.invite_link
+                    logger.info(f"✅ Уникальная ссылка создана БЕЗ ограничений для пользователя {tg_user_id}, CHANNEL_ID={CHANNEL_ID}, ссылка={invite_link[:50]}...")
+                except Exception as last_error:
+                    logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Все попытки создания ссылки исчерпаны: {last_error}")
+                    # В этом случае invite_link остается None, и мы отправим сообщение без ссылки
 
     # Получаем даты начала и окончания подписки (уже сохранены выше)
     from db import get_subscription_expires_at, get_subscription_starts_at
@@ -3291,6 +3202,9 @@ async def yookassa_webhook(request: Request):
     # КРИТИЧЕСКИ ВАЖНО: Уведомление об оплате должно отправляться ВСЕГДА для ВСЕХ типов платежей (СБП, SberPay, карта)
     # даже если ссылка не создалась - пользователь заплатил и должен получить уведомление
     if invite_link:
+        # КРИТИЧЕСКИ ВАЖНО: Проверяем, что ссылка создана для правильного канала
+        # Ссылка должна быть новой, не из базы данных
+        logger.info(f"🔍 Проверка созданной ссылки для пользователя {tg_user_id}: CHANNEL_ID={CHANNEL_ID}, ссылка={invite_link[:100]}...")
         await save_invite_link(invite_link, tg_user_id, payment_id)
         
         # Форматируем даты для отображения
@@ -3372,22 +3286,35 @@ async def yookassa_webhook(request: Request):
         if is_bonus_payment:
             is_bonus_subscription = True
         
-        logger.info(f"🔍 Проверка бонусной подписки для меню: is_bonus_payment={is_bonus_payment}, is_bonus_subscription={is_bonus_subscription}, expires_at={expires_at_dt}, bonus_week_end={bonus_week_end_check}")
+        # КРИТИЧЕСКИ ВАЖНО: Проверяем, закончилась ли бонусная неделя
+        now_for_menu = datetime.now(timezone.utc)
+        bonus_week_ended_for_menu = now_for_menu > bonus_week_end_check
         
-        if is_bonus_subscription:
-            # БОНУСНАЯ НЕДЕЛЯ: После успешной оплаты ВСЕГДА показываем "Управление доступом"
+        logger.info(f"🔍 Проверка бонусной подписки для меню: is_bonus_payment={is_bonus_payment}, is_bonus_subscription={is_bonus_subscription}, expires_at={expires_at_dt}, bonus_week_end={bonus_week_end_check}, bonus_week_ended={bonus_week_ended_for_menu}")
+        
+        # КРИТИЧЕСКИ ВАЖНО: Если бонусная неделя закончилась, ВСЕГДА показываем БОЕВОЙ РЕЖИМ,
+        # независимо от суммы платежа или expires_at
+        # НЕ проверяем is_bonus_subscription, если бонусная неделя закончилась
+        if bonus_week_ended_for_menu:
+            # БОЕВОЙ РЕЖИМ: Бонусная неделя закончилась, после оплаты показываем БОЕВОЙ РЕЖИМ с "Управление доступом"
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
+            BTN_STATUS_1 = "📊 Статус доступа"
             BTN_ABOUT_1 = "ℹ️ О проекте"
+            BTN_CHECK_1 = "🔍 Проверить оплату"
+            BTN_SUPPORT = "💬 Поддержка"
             menu = ReplyKeyboardMarkup(
                 keyboard=[
                     [KeyboardButton(text=BTN_MANAGE_SUB)],
+                    [KeyboardButton(text=BTN_STATUS_1)],
                     [KeyboardButton(text=BTN_ABOUT_1)],
+                    [KeyboardButton(text=BTN_CHECK_1)],
+                    [KeyboardButton(text=BTN_SUPPORT)],
                 ],
                 resize_keyboard=True,
             )
-            logger.info(f"✅ ПРИНУДИТЕЛЬНО создано меню БОНУСНОЙ НЕДЕЛИ с 'Управление доступом' для пользователя {tg_user_id} (тип платежа: {payment_type_name})")
+            logger.info(f"⚔️ БОЕВОЙ РЕЖИМ: Создано меню БОЕВОГО РЕЖИМА с 'Управление доступом' для пользователя {tg_user_id} (тип платежа: {payment_type_name}, бонусная неделя закончилась)")
         else:
-            # ПРОДАКШН: Используем стандартное меню
+            # ПРОДАКШН (бонусная неделя еще активна): Используем стандартное меню
             BTN_MANAGE_SUB = "⚙️ Управление доступом"
             BTN_STATUS_1 = "📊 Статус доступа"
             BTN_ABOUT_1 = "ℹ️ О проекте"
@@ -3408,21 +3335,29 @@ async def yookassa_webhook(request: Request):
         menu_buttons = [btn.text for row in menu.keyboard for btn in row] if hasattr(menu, 'keyboard') else 'N/A'
         logger.info(f"🔍 ФИНАЛЬНОЕ меню для пользователя {tg_user_id} (тип платежа: {payment_type_name}): {menu_buttons}")
         
-        # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
-        # КРИТИЧЕСКИ ВАЖНО: Для бонусной недели вычисляем длительность в минутах
-        # Используем ту же проверку, что и для меню (is_bonus_subscription)
-        if is_bonus_subscription and starts_at_dt and expires_at_dt:
-            # Вычисляем разницу в минутах для бонусной недели
+        # Форматируем длительность доступа для отображения
+        # КРИТИЧЕСКИ ВАЖНО: Всегда вычисляем длительность из starts_at_dt и expires_at_dt
+        if starts_at_dt and expires_at_dt:
             time_diff = expires_at_dt - starts_at_dt
-            minutes_diff = int(time_diff.total_seconds() / 60)
-            if minutes_diff == 1:
-                duration_text = "1 минута"
-            elif 2 <= minutes_diff <= 4:
-                duration_text = f"{minutes_diff} минуты"
+            total_seconds = time_diff.total_seconds()
+            
+            # Если разница меньше 1 дня, показываем в минутах
+            if total_seconds < 86400:
+                minutes_diff = int(total_seconds / 60)
+                if minutes_diff <= 0:
+                    minutes_diff = 1  # Минимум 1 минута
+                if minutes_diff == 1:
+                    duration_text = "1 минута"
+                elif 2 <= minutes_diff <= 4:
+                    duration_text = f"{minutes_diff} минуты"
+                else:
+                    duration_text = f"{minutes_diff} минут"
             else:
-                duration_text = f"{minutes_diff} минут"
+                # Если больше 1 дня, показываем в днях
+                days_diff = total_seconds / 86400
+                duration_text = format_subscription_duration(days_diff)
         else:
-            # Для продакшн режима используем обычное форматирование
+            # Если даты не найдены, используем subscription_duration
             duration_text = format_subscription_duration(subscription_duration)
         
         # Формируем текст в зависимости от режима (бонусная неделя или продакшн)
@@ -3433,7 +3368,7 @@ async def yookassa_webhook(request: Request):
                 "\n\n🎉 <b>БОНУСНАЯ НЕДЕЛЯ</b>\n"
                 f"⏰ Ваш доступ действует до окончания бонусной недели\n\n"
                 "⚠️ <b>После окончания бонусной недели:</b>\n"
-                "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+                f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
                 "• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
             )
         else:
@@ -3546,30 +3481,40 @@ async def yookassa_webhook(request: Request):
             expires_str = format_datetime_moscow(expires_at_dt)
         else:
             starts_at_dt = datetime.now(timezone.utc)
-            if is_bonus_week_active():
-                expires_at_dt = starts_at_dt + timedelta(days=subscription_duration)
-            else:
-                expires_at_dt = starts_at_dt + timedelta(days=SUBSCRIPTION_DAYS)
+            current_duration = get_current_subscription_duration()
+            expires_at_dt = starts_at_dt + timedelta(days=current_duration)
+            # Убеждаемся, что expires_at > starts_at
+            if expires_at_dt <= starts_at_dt:
+                expires_at_dt = starts_at_dt + timedelta(minutes=1)
             starts_str = format_datetime_moscow(starts_at_dt)
             expires_str = format_datetime_moscow(expires_at_dt)
 
         # ВАЖНО: Принудительно обновляем меню после оплаты, чтобы показать правильные кнопки
         menu = await get_main_menu_for_user(tg_user_id)
         
-        # Форматируем длительность доступа для отображения (используем subscription_duration из активации)
-        # КРИТИЧЕСКИ ВАЖНО: Для бонусной недели вычисляем длительность в минутах
-        if is_bonus_week_active() and starts_at_dt and expires_at_dt:
-            # Вычисляем разницу в минутах для бонусной недели
+        # Форматируем длительность доступа для отображения
+        # КРИТИЧЕСКИ ВАЖНО: Всегда вычисляем длительность из starts_at_dt и expires_at_dt
+        if starts_at_dt and expires_at_dt:
             time_diff = expires_at_dt - starts_at_dt
-            minutes_diff = int(time_diff.total_seconds() / 60)
-            if minutes_diff == 1:
-                duration_text = "1 минута"
-            elif 2 <= minutes_diff <= 4:
-                duration_text = f"{minutes_diff} минуты"
+            total_seconds = time_diff.total_seconds()
+            
+            # Если разница меньше 1 дня, показываем в минутах
+            if total_seconds < 86400:
+                minutes_diff = int(total_seconds / 60)
+                if minutes_diff <= 0:
+                    minutes_diff = 1  # Минимум 1 минута
+                if minutes_diff == 1:
+                    duration_text = "1 минута"
+                elif 2 <= minutes_diff <= 4:
+                    duration_text = f"{minutes_diff} минуты"
+                else:
+                    duration_text = f"{minutes_diff} минут"
             else:
-                duration_text = f"{minutes_diff} минут"
+                # Если больше 1 дня, показываем в днях
+                days_diff = total_seconds / 86400
+                duration_text = format_subscription_duration(days_diff)
         else:
-            # Для продакшн режима используем обычное форматирование
+            # Если даты не найдены, используем subscription_duration
             duration_text = format_subscription_duration(subscription_duration)
         
         # Формируем текст в зависимости от режима (бонусная неделя или продакшн)
@@ -3578,7 +3523,7 @@ async def yookassa_webhook(request: Request):
                 "\n\n🎉 <b>БОНУСНАЯ НЕДЕЛЯ</b>\n"
                 f"⏰ Ваш доступ действует до окончания бонусной недели\n\n"
                 "⚠️ <b>После окончания бонусной недели:</b>\n"
-                "• Будет автоматически списана полная стоимость: <b>2990 рублей на 30 дней</b>\n"
+                f"• Будет автоматически списана полная стоимость: <b>{get_production_subscription_price()} рублей на {format_subscription_duration(get_production_subscription_duration())}</b>\n"
                 "• Автопродление можно отключить в меню «Управление доступом» до окончания бонусной недели\n\n"
             )
         else:
