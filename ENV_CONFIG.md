@@ -62,4 +62,3 @@ YOOKASSA_RETURN_URL=https://xasanim.ru/payment/return
 - ✅ Используется продакшн ключ ЮKassa (`live_`)
 - ✅ Домен настроен: `xasanim.ru`
 - ⚠️ Рекомендуется заменить `test@example.com` на реальный email
-
