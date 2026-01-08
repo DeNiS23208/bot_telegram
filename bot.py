@@ -2278,6 +2278,15 @@ async def main():
         print(f"✅ Имя бота получено: @{BOT_USERNAME}")
     except Exception as e:
         print(f"⚠️ Не удалось получить имя бота из API: {e}, используем из .env")
+    
+    # КРИТИЧЕСКИ ВАЖНО: Удаляем webhook перед запуском polling
+    # Иначе будет конфликт - нельзя использовать getUpdates пока активен webhook
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook удален, переходим на polling")
+    except Exception as e:
+        print(f"⚠️ Ошибка при удалении webhook: {e}")
+    
     await dp.start_polling(bot)
 
 
