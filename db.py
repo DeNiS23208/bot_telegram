@@ -126,6 +126,16 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_expires_at ON subscriptions(expires_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_auto_renewal ON subscriptions(auto_renewal_enabled)")
         
+        # Создаем таблицу для хранения времени начала бонусной недели
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bonus_week_config (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                start_time TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (id = 1)
+            )
+        """)
+        
         await db.commit()
         logger.info("✅ База данных инициализирована с оптимизациями")
 
@@ -822,4 +832,49 @@ async def get_users_list() -> list[dict]:
             })
         
         return users_list
+
+
+async def get_bonus_week_start_time() -> Optional[datetime]:
+    """Получает время начала бонусной недели из базы данных"""
+    from datetime import timezone
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT start_time FROM bonus_week_config WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        
+        if row and row[0]:
+            try:
+                start_time = datetime.fromisoformat(row[0])
+                # Убеждаемся, что datetime имеет timezone
+                if start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                return start_time
+            except (ValueError, TypeError) as e:
+                logger.error(f"Ошибка при парсинге времени начала бонусной недели: {e}")
+                return None
+        return None
+
+
+async def set_bonus_week_start_time(start_time: datetime) -> None:
+    """Устанавливает время начала бонусной недели в базу данных"""
+    from datetime import timezone
+    # Убеждаемся, что datetime имеет timezone
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=timezone.utc)
+    
+    start_time_str = start_time.isoformat()
+    updated_at_str = datetime.now(timezone.utc).isoformat()
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Используем INSERT OR REPLACE для обновления существующей записи
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO bonus_week_config (id, start_time, updated_at)
+            VALUES (1, ?, ?)
+            """,
+            (start_time_str, updated_at_str)
+        )
+        await db.commit()
+        logger.info(f"✅ Время начала бонусной недели сохранено: {start_time_str}")
 
