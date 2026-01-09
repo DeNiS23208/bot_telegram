@@ -2,8 +2,18 @@ import asyncio
 import os
 import inspect
 import aiohttp
-from datetime import datetime, timezone
+import aiosqlite
+import tempfile
+import smtplib
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
@@ -52,6 +62,7 @@ from config import (
     dni_prazdnika,
     vremya_sms,
     BONUS_WEEK_PRICE_RUB,
+    DB_PATH,
 )
 
 def format_subscription_duration(days: float) -> str:
@@ -342,6 +353,285 @@ async def cmd_user_list(message: Message):
         await message.answer(f"❌ Ошибка при получении списка пользователей: {str(e)}")
         import traceback
         traceback.print_exc()
+
+
+# ================== ФУНКЦИИ ДЛЯ ОТПРАВКИ ЕЖЕДНЕВНОЙ СВОДКИ ==================
+logger_bot = logging.getLogger(__name__)
+
+async def create_daily_summary_excel_bot(rows: list) -> Optional[str]:
+    """Создает Excel файл со сводкой по заполненным формам за 24 часа"""
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Сводка за 24 часа"
+        
+        # Стили
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Заголовки
+        headers = [
+            "Дата заполнения",
+            "Telegram ID",
+            "Username",
+            "Имя",
+            "Телефон",
+            "Email",
+            "Город проживания",
+            "Пол",
+            "Направление деятельности",
+            "Согласие на обработку ПД",
+            "Согласие с Офертой"
+        ]
+        
+        # Записываем заголовки
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+        
+        # Форматируем данные
+        gender_map = {
+            "male": "Мужской",
+            "female": "Женский",
+            "other": "Другое"
+        }
+        
+        # Записываем данные
+        for row_idx, row in enumerate(rows, 2):
+            try:
+                submitted_dt = datetime.fromisoformat(row['submitted_at'].replace('Z', '+00:00'))
+                if submitted_dt.tzinfo is None:
+                    submitted_dt = submitted_dt.replace(tzinfo=timezone.utc)
+                submitted_str = submitted_dt.strftime('%d.%m.%Y %H:%M:%S')
+            except:
+                submitted_str = row['submitted_at']
+            
+            gender_display = gender_map.get(row['gender'], row['gender'] or 'не указан')
+            
+            row_data = [
+                submitted_str,
+                row['telegram_id'],
+                f"@{row['username']}" if row['username'] else "не указан",
+                row['name'],
+                row['phone'],
+                row['email'],
+                row['city'],
+                gender_display,
+                row['activity'],
+                'Да' if row['privacy_accepted'] else 'Нет',
+                'Да' if row['offer_accepted'] else 'Нет'
+            ]
+            
+            for col, value in enumerate(row_data, 1):
+                cell = ws.cell(row=row_idx, column=col, value=value)
+                cell.border = border
+                cell.alignment = Alignment(horizontal='left', vertical='center')
+        
+        # Автоматическая ширина колонок
+        for col in range(1, len(headers) + 1):
+            column_letter = ws.cell(row=1, column=col).column_letter
+            max_length = 0
+            for row in ws.iter_rows(min_row=1, max_row=len(rows) + 1, min_col=col, max_col=col):
+                for cell in row:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Сохраняем файл
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        excel_filename = f"daily_form_summary_{timestamp}.xlsx"
+        excel_path = os.path.join(tempfile.gettempdir(), excel_filename)
+        wb.save(excel_path)
+        
+        logger_bot.info(f"✅ Excel файл со сводкой создан: {excel_path}")
+        return excel_path
+        
+    except Exception as e:
+        logger_bot.error(f"❌ Ошибка при создании Excel файла со сводкой: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+async def send_daily_summary_email_bot(excel_path: str, count: int) -> bool:
+    """Отправляет ежедневную сводку по заполненным формам на email"""
+    SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.mail.ru")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    REPORT_EMAIL = os.getenv("REPORT_EMAIL", "xasanimbuiss@mail.ru")
+    
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger_bot.warning("⚠️ SMTP настройки не заданы, пропускаем отправку сводки")
+        return False
+    
+    if not excel_path or not os.path.exists(excel_path):
+        logger_bot.warning(f"⚠️ Excel файл не найден: {excel_path}")
+        return False
+    
+    try:
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = REPORT_EMAIL
+        msg['Subject'] = f"Ежедневная сводка по формам - {datetime.now(timezone.utc).strftime('%d.%m.%Y')}"
+        
+        # Текст письма
+        body = f"""Здравствуйте!
+
+Ежедневная сводка по заполненным формам за последние 24 часа.
+
+📅 Дата: {datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M:%S')} UTC
+📊 Количество заполненных форм: {count}
+
+Файл со сводкой прикреплен к письму.
+
+---
+Это автоматическое сообщение, не отвечайте на него.
+        """
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Прикрепляем Excel файл
+        with open(excel_path, 'rb') as attachment:
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {os.path.basename(excel_path)}'
+            )
+            msg.attach(part)
+        
+        # Отправляем email
+        logger_bot.info(f"📧 Отправка ежедневной сводки на {REPORT_EMAIL}...")
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        text = msg.as_string()
+        server.sendmail(SMTP_USER, REPORT_EMAIL, text)
+        server.quit()
+        
+        logger_bot.info(f"✅ Ежедневная сводка успешно отправлена на {REPORT_EMAIL}")
+        return True
+        
+    except Exception as e:
+        logger_bot.error(f"❌ Ошибка при отправке ежедневной сводки на email: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def send_daily_form_summary_bot() -> bool:
+    """Собирает всех, кто заполнил форму за последние 24 часа, и отправляет сводку на email"""
+    try:
+        # Вычисляем время 24 часа назад
+        twenty_four_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        
+        # Получаем все записи за последние 24 часа
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT * FROM daily_form_submissions 
+                WHERE submitted_at >= ?
+                ORDER BY submitted_at ASC
+            """, (twenty_four_hours_ago,))
+            rows = await cursor.fetchall()
+        
+        if not rows:
+            logger_bot.info("ℹ️ За последние 24 часа никто не заполнил форму - сводка не отправляется")
+            return True
+        
+        logger_bot.info(f"📊 Найдено {len(rows)} заполненных форм за последние 24 часа")
+        
+        # Создаем Excel файл со сводкой
+        excel_path = await create_daily_summary_excel_bot(rows)
+        if not excel_path:
+            logger_bot.error("❌ Не удалось создать Excel файл со сводкой")
+            return False
+        
+        # Отправляем сводку на email
+        success = await send_daily_summary_email_bot(excel_path, len(rows))
+        
+        # Удаляем старые записи (старше 24 часов) после успешной отправки
+        if success:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                    DELETE FROM daily_form_submissions 
+                    WHERE submitted_at < ?
+                """, (twenty_four_hours_ago,))
+                await db.commit()
+            logger_bot.info(f"🗑️ Удалены старые записи из таблицы daily_form_submissions (старше 24 часов)")
+        
+        # Удаляем временный Excel файл
+        try:
+            os.remove(excel_path)
+            logger_bot.info(f"🗑️ Временный Excel файл удален: {excel_path}")
+        except Exception as cleanup_error:
+            logger_bot.warning(f"⚠️ Не удалось удалить временный файл: {cleanup_error}")
+        
+        return success
+        
+    except Exception as e:
+        logger_bot.error(f"❌ Ошибка при отправке ежедневной сводки: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+@dp.message(Command("send_report"))
+async def cmd_send_report(message: Message):
+    """Команда для отправки ежедневной сводки по формам"""
+    import traceback
+    
+    try:
+        # Отправляем сообщение о начале процесса сразу
+        await message.answer("📊 Формирование и отправка ежедневной сводки по формам...")
+        logger_bot.info("🔄 Команда /send_report вызвана")
+        
+        # Вызываем функцию отправки сводки
+        success = await send_daily_form_summary_bot()
+        logger_bot.info(f"📊 Результат send_daily_form_summary_bot: {success}")
+        
+        if success:
+            await message.answer(
+                "✅ <b>Сводка успешно отправлена</b>\n\n"
+                "📧 Письмо с Excel-файлом отправлено на указанный email.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "⚠️ <b>Не удалось отправить сводку</b>\n\n"
+                "Возможные причины:\n"
+                "• За последние 24 часа никто не заполнил форму\n"
+                "• Ошибка при создании Excel файла\n"
+                "• Проблемы с настройками SMTP\n\n"
+                "Проверьте логи для подробностей.",
+                parse_mode="HTML"
+            )
+            
+    except Exception as e:
+        error_msg = str(e)
+        logger_bot.error(f"❌ Критическая ошибка в cmd_send_report: {error_msg}")
+        traceback.print_exc()
+        await message.answer(
+            f"❌ <b>Ошибка при отправке сводки</b>\n\n"
+            f"Детали: {error_msg}\n\n"
+            f"Проверьте логи для подробностей.",
+            parse_mode="HTML"
+        )
 
 
 @dp.message(Command("start"))
