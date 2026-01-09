@@ -12,7 +12,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from aiogram import Bot, Dispatcher
@@ -753,6 +753,155 @@ async def cmd_send_update(message: Message):
     except Exception as e:
         error_msg = str(e)
         logger_bot.error(f"❌ Критическая ошибка в cmd_send_update: {error_msg}")
+        traceback.print_exc()
+        await message.answer(
+            f"❌ <b>Ошибка при отправке обновления</b>\n\n"
+            f"Детали: {error_msg}\n\n"
+            f"Проверьте логи для подробностей.",
+            parse_mode="HTML"
+        )
+
+
+@dp.message(Command("send_update_from_excel"))
+async def cmd_send_update_from_excel(message: Message):
+    """Команда для отправки обновления пользователям из Excel файла (бывшие пользователи Юнисендера)"""
+    import traceback
+    import asyncio
+    
+    try:
+        # Путь к Excel файлу
+        excel_path = os.path.join(os.path.dirname(__file__), "Лист Microsoft Excel.xlsx")
+        
+        if not os.path.exists(excel_path):
+            await message.answer(
+                f"❌ <b>Excel файл не найден!</b>\n\n"
+                f"Ожидаемый путь: {excel_path}\n\n"
+                f"Убедитесь, что файл 'Лист Microsoft Excel.xlsx' находится в директории бота.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Читаем Excel файл
+        await message.answer("📖 Читаю Excel файл...", parse_mode="HTML")
+        wb = load_workbook(excel_path)
+        ws = wb.active
+        
+        # Собираем username'ы из первой колонки
+        usernames = []
+        for row in ws.iter_rows(min_row=1, values_only=True):
+            if row and row[0]:
+                username = str(row[0]).strip()
+                if username.startswith('@'):
+                    usernames.append(username)  # Оставляем @
+                elif username:
+                    usernames.append(f"@{username}")  # Добавляем @
+        
+        if not usernames:
+            await message.answer("❌ <b>Не найдено username'ов в Excel файле</b>", parse_mode="HTML")
+            return
+        
+        await message.answer(
+            f"📊 <b>Найдено {len(usernames)} username'ов в Excel</b>\n\n"
+            f"📹 Начинаю отправку видео update.mp4...\n"
+            f"⏳ Это может занять некоторое время...",
+            parse_mode="HTML"
+        )
+        
+        # Путь к видео файлу
+        video_path = os.path.join(os.path.dirname(__file__), "update.mp4")
+        
+        if not os.path.exists(video_path):
+            await message.answer(
+                f"❌ <b>Видео файл не найден!</b>\n\n"
+                f"Ожидаемый путь: {video_path}",
+                parse_mode="HTML"
+            )
+            return
+        
+        bot_instance = Bot(token=TOKEN)
+        success_count = 0
+        error_count = 0
+        blocked_count = 0
+        not_found_count = 0
+        
+        # Текст сообщения
+        message_text = (
+            "Всем привет, Наиль Хасанов на связи! 👋\n\n"
+            "⚙️ Мы провели технический апдейт нашего бота.\n\n"
+            "❗ Для корректной работы бота @xasanimbot, перезапустите его, пожалуйста!\n\n"
+            "Посмотрите видео и сделайте так же 🙏"
+        )
+        
+        # Отправляем видео каждому username из Excel
+        for idx, username in enumerate(usernames, 1):
+            try:
+                # Пытаемся получить информацию о пользователе по username
+                try:
+                    chat = await bot_instance.get_chat(username)
+                    chat_id = chat.id
+                except Exception as get_chat_error:
+                    # Если не удалось получить chat, пробуем отправить напрямую по username
+                    chat_id = username
+                    logger_bot.warning(f"⚠️ Не удалось получить chat для {username}, пробую отправить напрямую: {get_chat_error}")
+                
+                # Получаем меню по умолчанию (так как не знаем telegram_id)
+                default_menu = await main_menu()
+                
+                # Отправляем видео с текстом и обновленным меню
+                video_file = FSInputFile(video_path)
+                await safe_send_video(
+                    bot=bot_instance,
+                    chat_id=chat_id,
+                    video=video_file,
+                    caption=message_text,
+                    parse_mode="HTML",
+                    reply_markup=default_menu
+                )
+                
+                success_count += 1
+                
+                # Небольшая задержка
+                if idx % 5 == 0:
+                    await asyncio.sleep(2)
+                    await message.answer(
+                        f"⏳ Обработано: {idx}/{len(usernames)} пользователей...",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await asyncio.sleep(0.3)
+                    
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "blocked" in error_msg or "user is deactivated" in error_msg:
+                    blocked_count += 1
+                elif "chat not found" in error_msg or "user not found" in error_msg or "username not found" in error_msg:
+                    not_found_count += 1
+                else:
+                    error_count += 1
+                    logger_bot.warning(f"⚠️ Ошибка при отправке пользователю {username}: {e}")
+        
+        # Закрываем сессию бота
+        await bot_instance.session.close()
+        
+        # Отправляем итоговый отчет
+        result_text = (
+            f"✅ <b>Отправка завершена!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"📖 Всего в Excel: {len(usernames)}\n"
+            f"✅ Успешно отправлено: {success_count}\n"
+            f"❌ Ошибки: {error_count}\n"
+            f"🚫 Заблокировали бота: {blocked_count}\n"
+            f"🔍 Пользователь не найден: {not_found_count}\n\n"
+            f"ℹ️ <b>Примечание:</b> Отправлено всем пользователям из Excel файла.\n"
+            f"Если пользователь не найден, возможно он изменил username или удалил аккаунт."
+        )
+        
+        await message.answer(result_text, parse_mode="HTML")
+        logger_bot.info(f"✅ Отправка из Excel завершена: успешно={success_count}, ошибки={error_count}, заблокировали={blocked_count}, не найдено={not_found_count}")
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger_bot.error(f"❌ Критическая ошибка в cmd_send_update_from_excel: {error_msg}")
         traceback.print_exc()
         await message.answer(
             f"❌ <b>Ошибка при отправке обновления</b>\n\n"
