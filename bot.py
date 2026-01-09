@@ -634,6 +634,134 @@ async def cmd_send_report(message: Message):
         )
 
 
+@dp.message(Command("send_update"))
+async def cmd_send_update(message: Message):
+    """Команда для отправки видео-обновления всем пользователям из БД с обновлением меню"""
+    import traceback
+    import asyncio
+    
+    try:
+        # Получаем список всех пользователей
+        users_list = await get_users_list()
+        
+        if not users_list:
+            await message.answer("📋 <b>Список пользователей пуст</b>", parse_mode="HTML")
+            return
+        
+        total_users = len(users_list)
+        await message.answer(
+            f"🔄 <b>Начинаю отправку обновления</b>\n\n"
+            f"📊 Всего пользователей в БД: {total_users}\n"
+            f"📹 Отправляю видео update.mp4\n"
+            f"⏳ Это может занять некоторое время...",
+            parse_mode="HTML"
+        )
+        
+        # Путь к видео файлу
+        video_path = os.path.join(os.path.dirname(__file__), "update.mp4")
+        
+        if not os.path.exists(video_path):
+            await message.answer(
+                f"❌ <b>Видео файл не найден!</b>\n\n"
+                f"Ожидаемый путь: {video_path}\n\n"
+                f"Убедитесь, что файл update.mp4 находится в директории бота.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Проверяем размер файла
+        file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+        if file_size_mb > MAX_VIDEO_SIZE_MB:
+            await message.answer(
+                f"⚠️ <b>Видео слишком большое!</b>\n\n"
+                f"Размер: {file_size_mb:.1f} MB\n"
+                f"Максимум: {MAX_VIDEO_SIZE_MB} MB",
+                parse_mode="HTML"
+            )
+            return
+        
+        bot_instance = Bot(token=TOKEN)
+        success_count = 0
+        error_count = 0
+        blocked_count = 0
+        
+        # Текст сообщения (как на скриншоте)
+        message_text = (
+            "Всем привет, Наиль Хасанов на связи! 👋\n\n"
+            "⚙️ Мы провели технический апдейт нашего бота.\n\n"
+            "❗ Для корректной работы бота @xasanimbot, перезапустите его, пожалуйста!\n\n"
+            "Посмотрите видео и сделайте так же 🙏"
+        )
+        
+        # Отправляем видео с обновленным меню каждому пользователю
+        for idx, user in enumerate(users_list, 1):
+            telegram_id = user['telegram_id']
+            
+            try:
+                # Получаем актуальное меню для пользователя
+                user_menu = await main_menu(telegram_id)
+                
+                # Отправляем видео с текстом и обновленным меню
+                video_file = FSInputFile(video_path)
+                await safe_send_video(
+                    bot=bot_instance,
+                    chat_id=telegram_id,
+                    video=video_file,
+                    caption=message_text,
+                    parse_mode="HTML",
+                    reply_markup=user_menu
+                )
+                
+                success_count += 1
+                
+                # Небольшая задержка, чтобы не превысить лимиты Telegram API
+                if idx % 5 == 0:
+                    await asyncio.sleep(2)  # Задержка каждые 5 пользователей (видео тяжелое)
+                    await message.answer(
+                        f"⏳ Обработано: {idx}/{total_users} пользователей...",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await asyncio.sleep(0.3)  # Небольшая задержка между сообщениями
+                    
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "blocked" in error_msg or "chat not found" in error_msg or "user is deactivated" in error_msg:
+                    blocked_count += 1
+                else:
+                    error_count += 1
+                    logger_bot.warning(f"⚠️ Ошибка при отправке пользователю {telegram_id}: {e}")
+        
+        # Закрываем сессию бота
+        await bot_instance.session.close()
+        
+        # Отправляем итоговый отчет
+        result_text = (
+            f"✅ <b>Отправка обновления завершена!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"✅ Успешно: {success_count}\n"
+            f"❌ Ошибки: {error_count}\n"
+            f"🚫 Заблокировали бота: {blocked_count}\n"
+            f"📈 Всего обработано: {total_users}\n\n"
+            f"ℹ️ <b>Примечание:</b> Сообщение отправлено всем пользователям из БД.\n"
+            f"Меню обновлено для всех получателей."
+        )
+        
+        await message.answer(result_text, parse_mode="HTML")
+        logger_bot.info(f"✅ Отправка обновления завершена: успешно={success_count}, ошибки={error_count}, заблокировали={blocked_count}")
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger_bot.error(f"❌ Критическая ошибка в cmd_send_update: {error_msg}")
+        traceback.print_exc()
+        await message.answer(
+            f"❌ <b>Ошибка при отправке обновления</b>\n\n"
+            f"Детали: {error_msg}\n\n"
+            f"Проверьте логи для подробностей.",
+            parse_mode="HTML"
+        )
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
