@@ -634,6 +634,154 @@ async def cmd_send_report(message: Message):
         )
 
 
+async def send_full_excel_report_bot() -> bool:
+    """Генерирует и отправляет полный Excel отчет по базе данных на email"""
+    try:
+        # Импортируем функцию генерации отчета (синхронная)
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from generate_excel_report import main as generate_report
+        
+        # Запускаем генерацию отчета в executor (так как функция синхронная)
+        loop = asyncio.get_event_loop()
+        report_file = await loop.run_in_executor(None, generate_report)
+        
+        if not report_file or not os.path.exists(report_file):
+            logger_bot.error("❌ Не удалось создать отчет")
+            return False
+        
+        # Настройки email
+        SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.mail.ru")
+        SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+        SMTP_USER = os.getenv("SMTP_USER", "")
+        SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+        REPORT_EMAIL = os.getenv("REPORT_EMAIL", "xasanimbuiss@mail.ru")
+        
+        if not SMTP_USER or not SMTP_PASSWORD:
+            logger_bot.error("❌ SMTP_USER и SMTP_PASSWORD должны быть установлены в .env")
+            return False
+        
+        # Отправляем email (синхронная операция, выполняем в executor)
+        def send_email_sync():
+            try:
+                msg = MIMEMultipart()
+                msg['From'] = SMTP_USER
+                msg['To'] = REPORT_EMAIL
+                msg['Subject'] = f"Отчет по базе данных бота - {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+                
+                body = f"""Здравствуйте!
+
+Автоматически сформированный отчет по базе данных Telegram-бота.
+
+Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
+
+Отчет содержит:
+- Сводную статистику
+- Список пользователей
+- Историю платежей
+- Информацию о подписках
+- Пригласительные ссылки
+
+Файл прикреплен к письму.
+
+---
+Это автоматическое сообщение, не отвечайте на него.
+                """
+                msg.attach(MIMEText(body, 'plain', 'utf-8'))
+                
+                # Прикрепляем файл
+                with open(report_file, 'rb') as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        'Content-Disposition',
+                        f'attachment; filename= {os.path.basename(report_file)}'
+                    )
+                    msg.attach(part)
+                
+                # Отправляем email
+                server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                text = msg.as_string()
+                server.sendmail(SMTP_USER, REPORT_EMAIL, text)
+                server.quit()
+                return True
+            except Exception as e:
+                logger_bot.error(f"❌ Ошибка при отправке email: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+        
+        success = await loop.run_in_executor(None, send_email_sync)
+        
+        # Удаляем временный файл после отправки
+        try:
+            if os.path.exists(report_file):
+                os.remove(report_file)
+                logger_bot.info(f"🗑️ Временный Excel файл удален: {report_file}")
+        except Exception as cleanup_error:
+            logger_bot.warning(f"⚠️ Не удалось удалить временный файл: {cleanup_error}")
+        
+        return success
+        
+    except Exception as e:
+        logger_bot.error(f"❌ Ошибка при генерации и отправке полного отчета: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+@dp.message(Command("send_stat"))
+async def cmd_send_stat(message: Message):
+    """Команда для отправки полного Excel отчета по базе данных"""
+    import traceback
+    
+    try:
+        # Отправляем сообщение о начале процесса сразу
+        await message.answer("📊 Формирование и отправка полного отчета по базе данных...")
+        logger_bot.info("🔄 Команда /send_stat вызвана")
+        
+        # Вызываем функцию отправки отчета
+        success = await send_full_excel_report_bot()
+        logger_bot.info(f"📊 Результат send_full_excel_report_bot: {success}")
+        
+        if success:
+            await message.answer(
+                "✅ <b>Отчет успешно отправлен</b>\n\n"
+                "📧 Письмо с Excel-файлом отправлено на указанный email.\n\n"
+                "Отчет содержит:\n"
+                "• Сводную статистику\n"
+                "• Список пользователей\n"
+                "• Историю платежей\n"
+                "• Информацию о подписках\n"
+                "• Пригласительные ссылки",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "⚠️ <b>Не удалось отправить отчет</b>\n\n"
+                "Возможные причины:\n"
+                "• Ошибка при создании Excel файла\n"
+                "• Проблемы с настройками SMTP\n"
+                "• Проблемы с доступом к базе данных\n\n"
+                "Проверьте логи для подробностей.",
+                parse_mode="HTML"
+            )
+            
+    except Exception as e:
+        error_msg = str(e)
+        logger_bot.error(f"❌ Критическая ошибка в cmd_send_stat: {error_msg}")
+        traceback.print_exc()
+        await message.answer(
+            f"❌ <b>Ошибка при отправке отчета</b>\n\n"
+            f"Детали: {error_msg}\n\n"
+            f"Проверьте логи для подробностей.",
+            parse_mode="HTML"
+        )
+
+
 @dp.message(Command("send_update"))
 async def cmd_send_update(message: Message):
     """Команда для отправки видео-обновления всем пользователям из БД с обновлением меню"""
