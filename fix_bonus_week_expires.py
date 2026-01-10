@@ -6,10 +6,8 @@
 import os
 import sqlite3
 from datetime import datetime, timezone
-from dotenv import load_dotenv
 
-load_dotenv()
-
+# Пытаемся прочитать DB_PATH из переменных окружения или используем стандартный путь
 DB_PATH = os.getenv("DB_PATH", "/opt/bot_telegram/bot.db")
 BONUS_WEEK_END = datetime(2026, 1, 14, 10, 58, 42, tzinfo=timezone.utc)
 
