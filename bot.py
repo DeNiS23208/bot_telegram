@@ -987,15 +987,14 @@ async def cmd_start(message: Message):
             time_left_text = "завершилась"
         
         # Форматируем время начала и окончания бонусной недели
+        # КРИТИЧЕСКИ ВАЖНО: Показываем фиксированное время начала: 7.01.2026 в 14:00 МСК
+        bonus_start_moscow = "07.01.2026 в 14:00 МСК"
+        
+        # Форматируем время окончания
         bonus_start = get_bonus_week_start()
-        # Убеждаемся, что datetime имеет timezone для правильного форматирования
-        if bonus_start.tzinfo is None:
-            from datetime import timezone
-            bonus_start = bonus_start.replace(tzinfo=timezone.utc)
         if bonus_end.tzinfo is None:
             from datetime import timezone
             bonus_end = bonus_end.replace(tzinfo=timezone.utc)
-        bonus_start_moscow = format_datetime_moscow(bonus_start)
         bonus_end_moscow = format_datetime_moscow(bonus_end)
         
         welcome_text = (
@@ -1504,15 +1503,13 @@ async def bonus_week_info(message: Message):
         time_left_text = "завершилась"
     
     # Форматируем время начала и окончания бонусной недели
-    bonus_start = get_bonus_week_start()
-    # Убеждаемся, что datetime имеет timezone для правильного форматирования
-    if bonus_start.tzinfo is None:
-        from datetime import timezone
-        bonus_start = bonus_start.replace(tzinfo=timezone.utc)
+    # КРИТИЧЕСКИ ВАЖНО: Показываем фиксированное время начала: 7.01.2026 в 14:00 МСК
+    bonus_start_moscow = "07.01.2026 в 14:00 МСК"
+    
+    # Форматируем время окончания
     if bonus_end.tzinfo is None:
         from datetime import timezone
         bonus_end = bonus_end.replace(tzinfo=timezone.utc)
-    bonus_start_moscow = format_datetime_moscow(bonus_start)
     bonus_end_moscow = format_datetime_moscow(bonus_end)
     
     bonus_text = (

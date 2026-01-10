@@ -2452,11 +2452,12 @@ async def check_bonus_week_ending_soon():
                             from config import get_bonus_week_start
                             bonus_start = get_bonus_week_start()
                             # Убеждаемся, что datetime имеет timezone для правильного форматирования
-                            if bonus_start.tzinfo is None:
-                                bonus_start = bonus_start.replace(tzinfo=timezone.utc)
+                            # КРИТИЧЕСКИ ВАЖНО: Показываем фиксированное время начала: 7.01.2026 в 14:00 МСК
+                            bonus_start_str = "07.01.2026 в 14:00 МСК"
+                            
+                            # Форматируем время окончания
                             if bonus_week_end.tzinfo is None:
                                 bonus_week_end = bonus_week_end.replace(tzinfo=timezone.utc)
-                            bonus_start_str = format_datetime_moscow(bonus_start)
                             bonus_end_str = format_datetime_moscow(bonus_week_end)
                             
                             if auto_renewal_enabled:
