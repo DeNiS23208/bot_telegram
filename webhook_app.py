@@ -4486,11 +4486,18 @@ async def yookassa_webhook(request: Request):
             expires_str = format_datetime_moscow(expires_at_dt)
         else:
             starts_at_dt = datetime.now(timezone.utc)
-            current_duration = get_current_subscription_duration()
-            expires_at_dt = starts_at_dt + timedelta(days=current_duration)
-            # Убеждаемся, что expires_at > starts_at
-            if expires_at_dt <= starts_at_dt:
-                expires_at_dt = starts_at_dt + timedelta(minutes=1)
+            # КРИТИЧЕСКИ ВАЖНО: Если это бонусная неделя - используем фиксированную дату окончания
+            if is_bonus_week_active():
+                from config import get_bonus_week_end
+                expires_at_dt = get_bonus_week_end()
+                if expires_at_dt.tzinfo is None:
+                    expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+            else:
+                current_duration = get_current_subscription_duration()
+                expires_at_dt = starts_at_dt + timedelta(days=current_duration)
+                # Убеждаемся, что expires_at > starts_at
+                if expires_at_dt <= starts_at_dt:
+                    expires_at_dt = starts_at_dt + timedelta(minutes=1)
             starts_str = format_datetime_moscow(starts_at_dt)
             expires_str = format_datetime_moscow(expires_at_dt)
 
