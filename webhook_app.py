@@ -18,6 +18,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import ChatJoinRequest, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.enums import ChatMemberStatus
 from yookassa import Payment, Configuration
 from yookassa.domain.notification import WebhookNotificationFactory
 from openpyxl import Workbook
@@ -142,6 +143,7 @@ async def startup_event():
     asyncio.create_task(check_bonus_week_transition_to_production())  # Уведомления о переходе в продакшн режим
     asyncio.create_task(cleanup_old_data_task())  # Добавляем задачу очистки
     asyncio.create_task(daily_form_summary_task())  # Ежедневная сводка по заполненным формам
+    asyncio.create_task(check_channel_join_reminders())  # Напоминания о вступлении в канал
     logger.info("✅ Фоновые задачи проверки истекших платежей и подписок запущены")
 
 
@@ -1316,9 +1318,16 @@ async def init_webhook_tables():
             payment_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             revoked INTEGER DEFAULT 0,
+            reminder_sent INTEGER DEFAULT 0,
             FOREIGN KEY (telegram_user_id) REFERENCES approved_users(telegram_user_id)
         )
     """)
+        # Добавляем поле reminder_sent, если его нет
+        try:
+            await db.execute("ALTER TABLE invite_links ADD COLUMN reminder_sent INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
         await db.execute("""
         CREATE TABLE IF NOT EXISTS daily_form_submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1375,7 +1384,7 @@ async def save_invite_link(invite_link: str, telegram_user_id: int, payment_id: 
     """Сохраняет информацию о созданной ссылке-приглашении (async версия)"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-        "INSERT OR REPLACE INTO invite_links(invite_link, telegram_user_id, payment_id, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO invite_links(invite_link, telegram_user_id, payment_id, created_at, reminder_sent) VALUES (?, ?, ?, ?, 0)",
         (invite_link, telegram_user_id, payment_id, datetime.now(timezone.utc).isoformat())
     )
         await db.commit()
@@ -2501,6 +2510,146 @@ async def check_bonus_week_ending_soon():
         except Exception as e:
             logger.error(f"❌ Ошибка в фоновой задаче проверки окончания бонусной недели: {e}")
             await asyncio.sleep(10)  # Уменьшено для более точного срабатывания
+
+
+async def check_channel_join_reminders():
+    """Проверяет пользователей, которым была отправлена ссылка, но они не вступили в канал, и отправляет напоминание"""
+    REMINDER_INTERVAL_HOURS = 1  # Через сколько часов отправлять напоминание (1 час)
+    CHECK_INTERVAL_SECONDS = 600  # Проверяем каждые 10 минут
+    
+    while True:
+        try:
+            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+            
+            now = datetime.now(timezone.utc)
+            reminder_time = now - timedelta(hours=REMINDER_INTERVAL_HOURS)
+            
+            # Получаем ссылки, которые были созданы более 1 часа назад, но напоминание еще не отправлялось
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute("""
+                    SELECT 
+                        il.invite_link,
+                        il.telegram_user_id,
+                        il.created_at,
+                        il.reminder_sent,
+                        s.expires_at,
+                        s.saved_payment_method_id,
+                        u.form_filled
+                    FROM invite_links il
+                    LEFT JOIN subscriptions s ON il.telegram_user_id = s.telegram_id
+                    LEFT JOIN users u ON il.telegram_user_id = u.telegram_id
+                    WHERE il.revoked = 0
+                    AND il.reminder_sent = 0
+                    AND il.created_at <= ?
+                    AND s.expires_at IS NOT NULL
+                    AND s.expires_at > datetime('now', 'utc')
+                    ORDER BY il.created_at ASC
+                """, (reminder_time.isoformat(),))
+                
+                links_to_check = await cursor.fetchall()
+            
+            logger.info(f"🔍 Проверка напоминаний о вступлении в канал: найдено {len(links_to_check)} ссылок для проверки")
+            
+            for link_row in links_to_check:
+                invite_link, telegram_id, created_at, reminder_sent, expires_at, saved_payment_method_id, form_filled = link_row
+                
+                try:
+                    # Проверяем, вступил ли пользователь в канал
+                    try:
+                        chat_member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=telegram_id)
+                        is_member = chat_member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+                    except Exception as member_error:
+                        # Если ошибка (пользователь не найден, заблокировал бота и т.д.) - считаем, что не вступил
+                        logger.warning(f"⚠️ Не удалось проверить статус пользователя {telegram_id} в канале: {member_error}")
+                        is_member = False
+                    
+                    # Проверяем условия для отправки напоминания:
+                    # 1. Пользователь не вступил в канал
+                    # 2. У пользователя есть активная подписка
+                    # 3. У пользователя есть сохраненная карта (привязал карту)
+                    # 4. Форма заполнена
+                    # 5. Напоминание еще не отправлялось
+                    
+                    if not is_member:
+                        # Проверяем, что у пользователя есть активная подписка
+                        if expires_at:
+                            try:
+                                expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                                if expires_dt.tzinfo is None:
+                                    expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+                                
+                                if expires_dt > now and saved_payment_method_id and form_filled:
+                                    # Все условия выполнены - отправляем напоминание
+                                    logger.info(f"📧 Отправка напоминания о вступлении в канал пользователю {telegram_id}")
+                                    
+                                    # Получаем ссылку из БД
+                                    async with aiosqlite.connect(DB_PATH) as db_link:
+                                        cursor_link = await db_link.execute(
+                                            "SELECT invite_link FROM invite_links WHERE telegram_user_id = ? AND revoked = 0 ORDER BY created_at DESC LIMIT 1",
+                                            (telegram_id,)
+                                        )
+                                        link_row = await cursor_link.fetchone()
+                                        current_invite_link = link_row[0] if link_row else invite_link
+                                    
+                                    # Отправляем напоминание
+                                    reminder_text = (
+                                        "🔔 <b>Напоминание</b>\n\n"
+                                        "Вы подписались на наш канал, но так и не вступили.\n\n"
+                                        "🔗 <b>Ваша индивидуальная ссылка на канал:</b>\n"
+                                        f"{current_invite_link}\n\n"
+                                        "⚠️ <b>ВАЖНО:</b>\n"
+                                        "• Ссылка индивидуальная - её может использовать только вы\n"
+                                        "• При переходе по ссылке вам нужно будет подать заявку на вступление\n"
+                                        "• Заявка будет автоматически одобрена только для вас\n"
+                                        "• Не передавайте ссылку другим людям"
+                                    )
+                                    
+                                    # Получаем меню пользователя
+                                    menu = await get_main_menu_for_user(telegram_id)
+                                    
+                                    success = await safe_send_message(
+                                        bot=bot,
+                                        chat_id=telegram_id,
+                                        text=reminder_text,
+                                        parse_mode="HTML",
+                                        reply_markup=menu
+                                    )
+                                    
+                                    if success:
+                                        # Отмечаем, что напоминание отправлено
+                                        async with aiosqlite.connect(DB_PATH) as db_update:
+                                            await db_update.execute(
+                                                "UPDATE invite_links SET reminder_sent = 1 WHERE invite_link = ?",
+                                                (invite_link,)
+                                            )
+                                            await db_update.commit()
+                                        logger.info(f"✅ Напоминание отправлено пользователю {telegram_id}, reminder_sent обновлен")
+                                    else:
+                                        logger.warning(f"⚠️ Не удалось отправить напоминание пользователю {telegram_id}")
+                                else:
+                                    logger.debug(f"⏭️ Пропуск пользователя {telegram_id}: условия не выполнены (expires_at={expires_at}, saved_card={bool(saved_payment_method_id)}, form_filled={form_filled})")
+                            except Exception as date_error:
+                                logger.warning(f"⚠️ Ошибка проверки даты окончания для пользователя {telegram_id}: {date_error}")
+                    else:
+                        # Пользователь уже вступил в канал - отмечаем, что напоминание не нужно
+                        async with aiosqlite.connect(DB_PATH) as db_update:
+                            await db_update.execute(
+                                "UPDATE invite_links SET reminder_sent = 1 WHERE invite_link = ?",
+                                (invite_link,)
+                            )
+                            await db_update.commit()
+                        logger.info(f"✅ Пользователь {telegram_id} уже в канале, напоминание не требуется")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Ошибка обработки напоминания для пользователя {telegram_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка в фоновой задаче проверки напоминаний о вступлении в канал: {e}")
+            import traceback
+            traceback.print_exc()
+            await asyncio.sleep(60)  # При ошибке ждем минуту перед следующей попыткой
 
 
 async def check_expired_subscriptions():

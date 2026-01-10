@@ -2980,6 +2980,18 @@ async def on_chat_member_update(update: ChatMemberUpdated):
                 print(f"⚠️ Ошибка при бане пользователя {user_id}: {e}")
         else:
             print(f"✅ Пользователь {user_id} присоединился к каналу - проверка пройдена (есть активная подписка)")
+            
+            # Отмечаем, что напоминание больше не нужно (пользователь вступил в канал)
+            try:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute(
+                        "UPDATE invite_links SET reminder_sent = 1 WHERE telegram_user_id = ? AND reminder_sent = 0",
+                        (user_id,)
+                    )
+                    await db.commit()
+                logger_bot.info(f"✅ Обновлен reminder_sent для пользователя {user_id} (вступил в канал)")
+            except Exception as e:
+                logger_bot.warning(f"⚠️ Не удалось обновить reminder_sent для пользователя {user_id}: {e}")
 
 
 async def main():
