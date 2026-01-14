@@ -1744,6 +1744,7 @@ async def check_expired_payments():
                     continue
                 
                 # Проверяем точное время истечения - должно быть ровно 10 минут (с погрешностью ±1 минута)
+                time_since_creation = None  # Инициализируем переменную
                 try:
                     created_at_dt = datetime.fromisoformat(created_at)
                     now = datetime.now(timezone.utc)
@@ -1761,6 +1762,7 @@ async def check_expired_payments():
                 except Exception as time_error:
                     logger.warning(f"⚠️ Ошибка проверки времени для платежа {payment_id}: {time_error}")
                     # Продолжаем обработку, если не удалось проверить время
+                    # time_since_creation остается None
                 
                 # Проверяем актуальный статус платежа в ЮKassa
                 try:
@@ -1792,7 +1794,8 @@ async def check_expired_payments():
                                 )
                             if result:
                                 notified_payments.add(payment_id)  # Помечаем, что уведомление отправлено
-                                logger.info(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id} для платежа {payment_id} (один раз, через {time_since_creation:.1f} минут после создания)")
+                                time_text = f"{time_since_creation:.1f}" if time_since_creation is not None else "неизвестно"
+                                logger.info(f"✅ Отправлено уведомление об истечении ссылки пользователю {telegram_id} для платежа {payment_id} (один раз, через {time_text} минут после создания)")
                             else:
                                 logger.warning(f"⚠️ Не удалось отправить уведомление об истечении ссылки пользователю {telegram_id}")
                     else:
@@ -2060,6 +2063,7 @@ async def attempt_auto_renewal(telegram_id: int, saved_payment_method_id: str, a
                     logger.info(f"✅ Пользователь {telegram_id} забанен СРАЗУ после первой неудачной попытки автопродления")
                 except Exception as ban_error:
                     logger.warning(f"⚠️ Ошибка бана пользователя {telegram_id}: {ban_error}")
+                
                 from db import get_invite_link
                 # revoke_invite_link определена в webhook_app.py, не нужно импортировать
                 
