@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Скрипт для проверки состояния базы данных"""
+import sqlite3
+import os
+import sys
+
+DB_PATH = os.getenv("DB_PATH", "/opt/bot_telegram/bot.db")
+
+if not os.path.exists(DB_PATH):
+    print(f"❌ База данных не найдена: {DB_PATH}")
+    sys.exit(1)
+
+conn = sqlite3.connect(DB_PATH)
+cur = conn.cursor()
+
+tables = ["users", "subscriptions", "payments", "approved_users", "invite_links", "processed_payments"]
+print("📊 Состояние базы данных:")
+print("-" * 40)
+for table in tables:
+    try:
+        count = cur.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        print(f"  {table:25s}: {count:5d} записей")
+    except sqlite3.OperationalError:
+        print(f"  {table:25s}: таблица не существует")
+
+conn.close()
+
